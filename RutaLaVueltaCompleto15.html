@@ -1,0 +1,1953 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RutaLaVuelta — Multi-dispositivo con Supabase</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+*{ -webkit-tap-highlight-color:transparent; }
+body{ font-family:'Inter',system-ui,sans-serif; background-color: #0F172A; color: #F8FAFC; }
+.map-full{ position:absolute; inset:0; }
+.modal{ animation:pop .25s ease; } @keyframes pop{ from{transform:scale(.95);opacity:0;} to{transform:scale(1);opacity:1;} }
+.sheet{ animation:up .3s cubic-bezier(.4,0,.2,1); } @keyframes up{ from{transform:translateY(40px);opacity:0;} to{transform:translateY(0);opacity:1;} }
+.leaflet-popup-content-wrapper{ background:#1E293B; color:#F8FAFC; border-radius:16px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5); }
+.leaflet-popup-tip{ background:#1E293B; }
+.leaflet-bar a{ background:#1E293B; color:#E2E8F0; border-bottom:1px solid #334155; }
+::-webkit-scrollbar{ width:6px; } ::-webkit-scrollbar-thumb{ background:#475569; border-radius:3px; }
+.car-marker{ filter:drop-shadow(0 4px 6px rgba(0,0,0,.5)); }
+.leaflet-container{ background:#F8FAFC; }
+
+/* Filtro CSS para lograr el mapa monocromático claro / gris claro de la imagen de referencia */
+.leaflet-tile-pane {
+  filter: grayscale(100%) brightness(115%) contrast(90%);
+}
+
+/* Filtro CSS para transformar la moto roja del emoji 🏍️ exacto en Azul Eléctrico Pastel (#7DF9FF) */
+.moto-blue-filter {
+  filter: hue-rotate(185deg) saturate(220%) brightness(125%) drop-shadow(0 4px 6px rgba(0,0,0,0.4));
+  display: inline-block;
+}
+
+.pulse-dot{ animation:pd 1.6s infinite; } @keyframes pd{ 0%{box-shadow:0 0 0 0 rgba(125,249,255,0.7);} 70%{box-shadow:0 0 0 14px rgba(125,249,255,0);} 100%{box-shadow:0 0 0 0 rgba(125,249,255,0);} }
+input:focus, select:focus{ outline:none; }
+pre.sql{ white-space:pre-wrap; word-break:break-all; font-size:11px; line-height:1.5; background:#0F172A; border:1px solid #334155; border-radius:12px; padding:12px; color:#7DF9FF; max-height:180px; overflow:auto; }
+
+#splash-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: linear-gradient(135deg, #0B132B 0%, #1C2541 50%, #0B192C 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.6s ease, visibility 0.6s ease;
+}
+#splash-screen.fade-out {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.logo-glow {
+  filter: drop-shadow(0 0 25px rgba(125, 249, 255, 0.8));
+}
+</style>
+</head>
+<body class="bg-slate-900 text-slate-100 h-screen overflow-hidden">
+
+<!-- PANTALLA DE BIENVENIDA (SPLASH SCREEN) -->
+<div id="splash-screen" class="flex flex-col items-center justify-center p-6 text-center">
+  <div class="relative mb-6">
+    <svg class="w-40 h-28 logo-glow text-[#7DF9FF]" viewBox="0 0 200 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M45 90 C 20 90, 20 30, 45 30 C 65 30, 85 55, 100 65 C 115 75, 135 90, 155 90 C 180 90, 180 30, 155 30 C 140 30, 125 45, 110 58" 
+            stroke="currentColor" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M125 15 L 170 25 L 155 70" 
+            stroke="currentColor" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </div>
+  <h1 class="text-4xl font-extrabold tracking-tight text-white mb-2">Ruta<span class="text-[#7DF9FF]">LaVuelta</span></h1>
+  <p class="text-slate-400 text-sm font-medium tracking-wide mb-8">Transporte Real & Movilidad • Caracas, Venezuela</p>
+  
+  <div class="flex items-center gap-2 bg-slate-800/85 backdrop-blur border border-slate-700/60 rounded-full px-5 py-2.5 shadow-xl">
+    <span class="w-3 h-3 bg-[#7DF9FF] rounded-full animate-ping"></span>
+    <span class="text-xs font-semibold text-slate-200">Cargando la experiencia...</span>
+  </div>
+  <div class="absolute bottom-6 text-[10px] text-slate-500 font-medium">© 2026 RutaLaVuelta. All Rights Reserved.</div>
+</div>
+
+<div id="app" class="flex h-screen flex-col max-w-lg mx-auto bg-slate-900 sm:border-x sm:border-slate-800 relative shadow-2xl">
+
+  <!-- AUTH -->
+  <div id="view-auth" class="flex-1 overflow-auto">
+    <div class="min-h-full flex flex-col justify-center px-6 py-8">
+      <div class="text-center mb-6">
+        <div class="inline-flex items-center justify-center gap-2 mb-3">
+          <svg class="w-16 h-12 logo-glow text-[#7DF9FF]" viewBox="0 0 200 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M45 90 C 20 90, 20 30, 45 30 C 65 30, 85 55, 100 65 C 115 75, 135 90, 155 90 C 180 90, 180 30, 155 30 C 140 30, 125 45, 110 58" 
+                  stroke="currentColor" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M125 15 L 170 25 L 155 70" 
+                  stroke="currentColor" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div class="text-3xl font-extrabold tracking-tight text-white">Ruta<span class="text-[#7DF9FF]">LaVuelta</span></div>
+        <div class="text-slate-400 text-sm mt-1">Transporte Seguro • Caracas, Venezuela</div>
+        <div id="backend-badge" class="mt-3 inline-flex items-center gap-2 text-xs font-semibold bg-slate-800 border border-slate-700 rounded-full px-3 py-1.5 text-slate-400">⚪ Modo local (solo este navegador)</div>
+      </div>
+
+      <button onclick="openBackend()" class="w-full py-3 mb-5 bg-slate-800/80 border border-slate-700 hover:border-[#7DF9FF] rounded-2xl text-sm font-semibold text-slate-300 transition">🔌 Conectar backend en la nube (Supabase)</button>
+
+      <div class="flex bg-slate-800 border border-slate-700 rounded-2xl p-1 mb-6 text-sm font-semibold">
+        <button id="role-passenger" onclick="setRole('passenger')" class="flex-1 py-3 rounded-xl transition bg-[#7DF9FF] text-slate-950 font-bold shadow-sm">🧍 Pasajero</button>
+        <button id="role-driver" onclick="setRole('driver')" class="flex-1 py-3 rounded-xl transition text-slate-400">🚗 Conductor</button>
+      </div>
+
+      <div class="flex bg-slate-800 border border-slate-700 rounded-2xl p-1 mb-6 text-sm font-semibold">
+        <button id="tab-login" onclick="switchAuthTab('login')" class="flex-1 py-2.5 rounded-xl transition bg-[#7DF9FF] text-slate-950 font-bold shadow-sm">Iniciar sesión</button>
+        <button id="tab-register" onclick="switchAuthTab('register')" class="flex-1 py-2.5 rounded-xl transition text-slate-400">Registrarse</button>
+      </div>
+
+      <div id="form-login" class="space-y-3">
+        <input id="li-email" type="text" placeholder="Correo o Cédula" class="w-full bg-slate-800/60 border border-slate-700 rounded-2xl px-4 py-3.5 focus:border-[#7DF9FF] focus:ring-2 focus:ring-[#7DF9FF]/40 text-slate-100 placeholder-slate-500">
+        <input id="li-pass" type="password" placeholder="Contraseña" class="w-full bg-slate-800/60 border border-slate-700 rounded-2xl px-4 py-3.5 focus:border-[#7DF9FF] focus:ring-2 focus:ring-[#7DF9FF]/40 text-slate-100 placeholder-slate-500">
+        <div id="login-error" class="hidden text-sm text-red-400 px-1 font-medium"></div>
+        <button onclick="doLogin()" class="w-full py-4 bg-[#7DF9FF] hover:bg-[#5ce1e8] text-slate-950 font-bold rounded-2xl shadow-md transition">Entrar</button>
+      </div>
+
+      <div id="form-register" class="space-y-3 hidden">
+        <input id="rg-name" placeholder="Nombre completo" class="w-full bg-slate-800/60 border border-slate-700 rounded-2xl px-4 py-3.5 focus:border-[#7DF9FF] text-slate-100 placeholder-slate-500">
+        <input id="rg-cedula" type="text" placeholder="Número de Cédula (Ej: V-12345678)" class="w-full bg-slate-800/60 border border-slate-700 rounded-2xl px-4 py-3.5 focus:border-[#7DF9FF] text-slate-100 placeholder-slate-500">
+        <input id="rg-email" type="email" placeholder="Correo electrónico" class="w-full bg-slate-800/60 border border-slate-700 rounded-2xl px-4 py-3.5 focus:border-[#7DF9FF] text-slate-100 placeholder-slate-500">
+        <input id="rg-phone" type="tel" placeholder="Teléfono de contacto (Ej: 04141234567)" class="w-full bg-slate-800/60 border border-slate-700 rounded-2xl px-4 py-3.5 focus:border-[#7DF9FF] text-slate-100 placeholder-slate-500">
+        <input id="rg-address" type="text" placeholder="Dirección exacta de residencia" class="w-full bg-slate-800/60 border border-slate-700 rounded-2xl px-4 py-3.5 focus:border-[#7DF9FF] text-slate-100 placeholder-slate-500">
+        <input id="rg-pass" type="password" placeholder="Contraseña (mín. 4 caracteres)" class="w-full bg-slate-800/60 border border-slate-700 rounded-2xl px-4 py-3.5 focus:border-[#7DF9FF] text-slate-100 placeholder-slate-500">
+        
+        <div class="bg-slate-800/80 p-3 rounded-2xl border border-slate-700 space-y-2">
+          <label class="block text-xs font-bold text-slate-300">📄 Foto de la Cédula de Identidad:</label>
+          <input id="rg-photo-cedula" type="file" accept="image/*" class="w-full text-xs text-slate-400 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-[#7DF9FF] file:text-slate-950 hover:file:bg-[#5ce1e8]">
+        </div>
+        
+        <div class="bg-slate-800/80 p-3 rounded-2xl border border-slate-700 space-y-2">
+          <label class="block text-xs font-bold text-slate-300">📸 Foto del Rostro (Selfie tipo carnet):</label>
+          <input id="rg-photo-face" type="file" accept="image/*" class="w-full text-xs text-slate-400 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-[#7DF9FF] file:text-slate-950 hover:file:bg-[#5ce1e8]">
+        </div>
+
+        <div id="driver-fields" class="hidden space-y-3">
+          <input id="rg-car" placeholder="Vehículo (Ej: Toyota Corolla 2022)" class="w-full bg-slate-800/60 border border-slate-700 rounded-2xl px-4 py-3.5 focus:border-[#7DF9FF] text-slate-100 placeholder-slate-500">
+          <input id="rg-plate" placeholder="Placa (Ej: AA123BZ)" class="w-full bg-slate-800/60 border border-slate-700 rounded-2xl px-4 py-3.5 focus:border-[#7DF9FF] uppercase text-slate-100 placeholder-slate-500">
+        </div>
+        <div id="register-error" class="hidden text-sm text-red-400 px-1 font-medium"></div>
+        <button onclick="doRegister()" class="w-full py-4 bg-[#7DF9FF] hover:bg-[#5ce1e8] text-slate-950 font-bold rounded-2xl shadow-md transition">Crear cuenta e ingresar</button>
+      </div>
+
+      <div class="text-center text-xs text-slate-500 mt-6">Los datos ingresados son validados de forma única por cédula, correo y teléfono.</div>
+    </div>
+  </div>
+
+  <!-- APP VIEW -->
+  <div id="view-app" class="hidden flex-1 flex flex-col overflow-hidden bg-slate-900">
+    <header class="bg-slate-900/95 backdrop-blur border-b border-slate-800 px-4 py-3 flex items-center justify-between z-[1200] shadow-md">
+      <div class="flex items-center gap-3">
+        <svg class="w-8 h-6 logo-glow text-[#7DF9FF]" viewBox="0 0 200 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M45 90 C 20 90, 20 30, 45 30 C 65 30, 85 55, 100 65 C 115 75, 135 90, 155 90 C 180 90, 180 30, 155 30 C 140 30, 125 45, 110 58" stroke="currentColor" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M125 15 L 170 25 L 155 70" stroke="currentColor" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div>
+          <div class="font-bold tracking-tight leading-none text-white">Ruta<span class="text-[#7DF9FF]">LaVuelta</span></div>
+          <div class="text-[11px] text-slate-400" id="hdr-sub">Caracas • Venezuela</div>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <span id="hdr-cloud" class="text-xs" title="Backend">⚪</span>
+        <span id="hdr-role" class="text-[11px] font-bold bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-full text-[#7DF9FF]"></span>
+        <button onclick="logout()" class="text-[11px] font-semibold bg-red-950/60 border border-red-800 hover:bg-red-900 px-3 py-1.5 rounded-full text-red-300">Salir</button>
+      </div>
+    </header>
+
+    <!-- PASAJERO VIEW -->
+    <div id="view-passenger" class="flex-1 relative overflow-hidden">
+      <div id="map" class="map-full z-0"></div>
+      <button onclick="centerOnMe()" class="absolute right-4 bottom-40 z-[1100] w-11 h-11 bg-slate-900/90 border border-slate-700 text-[#7DF9FF] rounded-full shadow-xl flex items-center justify-center text-xl hover:bg-slate-800">🎯</button>
+      <div class="absolute top-4 left-4 right-4 z-[1100] space-y-2">
+        <div class="flex gap-2">
+          <button onclick="enablePickupPinMode()" id="btn-set-pickup" class="flex-1 bg-slate-900/95 backdrop-blur border border-slate-700 hover:border-[#7DF9FF] rounded-2xl px-3.5 py-2.5 text-left flex items-center gap-2 shadow-xl transition">
+            <span class="text-green-400 text-base">🟢</span>
+            <span id="pickup-hint" class="text-xs text-slate-200 font-semibold truncate">Origen: Cooperativa Moto Taxi — Calle José Félix Ribas, Zona 6 (La Vuelta)</span>
+          </button>
+        </div>
+        <div class="flex gap-2">
+          <button onclick="openSearch()" class="flex-1 bg-slate-900/95 backdrop-blur border border-slate-700 rounded-2xl px-4 py-3.5 text-left flex items-center gap-3 shadow-xl min-w-0">
+            <span class="text-[#7DF9FF] text-xl shrink-0">🔍</span>
+            <span id="search-hint" class="text-white font-medium truncate">¿A dónde vas en Caracas?</span>
+          </button>
+          <button onclick="startVoiceCommand('both')" class="w-14 bg-[#7DF9FF] hover:bg-[#5ce1e8] text-slate-950 rounded-2xl flex items-center justify-center text-2xl shadow-xl shrink-0 transition" title="Hablar destino o enviar GPS al conductor">🎤</button>
+        </div>
+        <div id="active-ride-chip" class="hidden mt-1 bg-[#7DF9FF] border border-[#00B4D8] text-slate-950 text-xs font-bold px-4 py-2 rounded-full shadow-md inline-flex items-center gap-2">
+          <span class="w-2.5 h-2.5 bg-slate-950 rounded-full pulse-dot"></span><span id="active-ride-text">Viaje en curso</span>
+        </div>
+      </div>
+
+      <!-- SEARCH OVERLAY -->
+      <div id="search-overlay" class="hidden absolute inset-0 z-[1150] bg-[#0F172A] flex flex-col">
+        <div class="flex items-center gap-2 p-4 border-b border-slate-800 bg-[#0F172A]">
+          <button onclick="closeSearch()" class="w-10 h-10 flex items-center justify-center text-2xl text-white hover:text-[#7DF9FF]">✕</button>
+          <input id="search-input" oninput="onSearchInput(this.value)" placeholder="Buscar o decir: 'Destino Palo Verde'..." class="flex-1 bg-slate-800 border border-slate-700 rounded-2xl px-4 py-3 focus:border-[#7DF9FF] text-white placeholder-slate-400">
+          <button id="btn-voice-dest" onclick="startVoiceCommand('destination')" class="w-12 h-12 bg-[#7DF9FF] hover:bg-[#5ce1e8] text-slate-950 rounded-2xl flex items-center justify-center text-xl shadow-lg shrink-0 transition" title="Buscar destino por voz">🎤</button>
+        </div>
+        <div id="voice-status-banner" class="hidden mx-4 mt-2 bg-slate-800 border border-[#7DF9FF] rounded-2xl px-4 py-2.5 flex items-center justify-between text-xs text-white font-semibold">
+          <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 bg-red-500 rounded-full animate-ping"></span><span id="voice-status-text">Escuchando... Di "Destino Palo Verde" o "Enviar ubicación GPS"</span></div>
+          <button onclick="stopVoiceCommand()" class="text-[#7DF9FF] font-bold ml-2">Detener</button>
+        </div>
+        <div class="p-3 border-b border-slate-800 bg-[#0F172A] space-y-2">
+          <button onclick="enableMapPinMode()" class="w-full bg-blue-950 hover:bg-blue-900 border border-blue-700 text-[#7DF9FF] font-bold py-3 px-4 rounded-2xl flex items-center justify-center gap-2 text-sm shadow-sm transition">
+            📍 Marcar destino tocando el mapa interactivo
+          </button>
+          <button onclick="startVoiceCommand('both')" class="w-full bg-slate-800 hover:bg-slate-700 border border-[#7DF9FF]/60 text-white font-bold py-2.5 px-4 rounded-2xl flex items-center justify-center gap-2 text-xs shadow-sm transition">
+            🎙️ Comando de Voz Inteligente ("Destino..." o "Enviar GPS por WhatsApp")
+          </button>
+        </div>
+        <div class="px-5 pt-3 pb-1 text-[11px] uppercase tracking-wider text-white font-extrabold bg-[#0F172A]">Puntos Frecuentes en Caracas</div>
+        <div id="search-results" class="flex-1 overflow-auto p-3 space-y-1.5 bg-[#0F172A]"></div>
+      </div>
+
+      <div id="sheet" class="absolute inset-x-0 bottom-0 z-[1100]"></div>
+
+      <nav class="absolute bottom-0 inset-x-0 z-[1110] bg-slate-900/95 backdrop-blur border-t border-slate-800 grid grid-cols-4 text-[11px] font-semibold shadow-lg">
+        <button onclick="navPassenger('home')" class="pnav py-2.5 flex flex-col items-center gap-0.5 text-[#7DF9FF]" data-p="home"><span class="text-xl">🏠</span>Inicio</button>
+        <button onclick="navPassenger('activity')" class="pnav py-2.5 flex flex-col items-center gap-0.5 text-slate-400" data-p="activity"><span class="text-xl">📜</span>Historial</button>
+        <button onclick="navPassenger('wallet')" class="pnav py-2.5 flex flex-col items-center gap-0.5 text-slate-400" data-p="wallet"><span class="text-xl">💳</span>Billetera</button>
+        <button onclick="navPassenger('profile')" class="pnav py-2.5 flex flex-col items-center gap-0.5 text-slate-400" data-p="profile"><span class="text-xl">👤</span>Perfil</button>
+      </nav>
+    </div>
+
+    <!-- CONDUCTOR VIEW -->
+    <div id="view-driver" class="flex-1 relative overflow-hidden hidden">
+      <div id="map-driver" class="map-full z-0"></div>
+      <div class="absolute top-4 left-4 right-4 z-[1100] flex gap-3">
+        <div class="flex-1 bg-slate-900/95 backdrop-blur border border-slate-800 rounded-2xl px-4 py-3 shadow-lg">
+          <div class="text-[11px] text-slate-400">Ganancias acumuladas</div>
+          <div class="text-2xl font-black text-[#7DF9FF]" id="drv-earnings">$ 0.00</div>
+        </div>
+        <button onclick="toggleAvailable()" class="bg-slate-900/95 backdrop-blur border border-slate-800 rounded-2xl px-4 py-3 shadow-lg text-center">
+          <div class="text-[11px] text-slate-400">Disponibilidad</div>
+          <div id="drv-status" class="font-bold text-[#7DF9FF]">● En línea</div>
+        </button>
+      </div>
+
+      <div id="pending-count" class="hidden absolute top-24 left-4 right-4 z-[1100] bg-slate-900/95 border border-[#7DF9FF]/60 rounded-2xl px-4 py-3 shadow-xl">
+        <div class="text-sm font-bold text-slate-100" id="pending-count-text">1 solicitud disponible</div>
+      </div>
+
+      <div id="sheet-driver" class="absolute inset-x-0 bottom-0 z-[1100]"></div>
+
+      <nav class="absolute bottom-0 inset-x-0 z-[1110] bg-slate-900/95 backdrop-blur border-t border-slate-800 grid grid-cols-3 text-[11px] font-semibold shadow-lg">
+        <button onclick="driverHome()" class="py-2.5 flex flex-col items-center gap-0.5 text-[#7DF9FF]"><span class="text-xl">🏠</span>Inicio</button>
+        <button onclick="driverEarnings()" class="py-2.5 flex flex-col items-center gap-0.5 text-slate-400"><span class="text-xl">📊</span>Balance</button>
+        <button onclick="driverProfile()" class="py-2.5 flex flex-col items-center gap-0.5 text-slate-400"><span class="text-xl">👤</span>Perfil</button>
+      </nav>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: BACKEND CLOUD SUPABASE -->
+<div id="modal-backend" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[2500] p-4">
+  <div class="modal bg-slate-900 rounded-3xl w-full max-w-md p-6 max-h-[90vh] overflow-auto shadow-2xl border border-slate-800" onclick="event.stopPropagation()">
+    <div class="flex justify-between items-center mb-4">
+      <div class="font-bold text-xl text-white">🔌 Conexión Supabase Nube</div>
+      <button onclick="$('modal-backend').classList.add('hidden')" class="text-slate-400 hover:text-white text-2xl font-bold px-2">✕</button>
+    </div>
+    <div class="text-sm text-slate-400 mb-4">Conecta tu proyecto Supabase para sincronización atómica multi-dispositivo y bloqueo de duplicados.</div>
+
+    <div class="space-y-3 text-sm">
+      <div class="bg-slate-950 border border-slate-800 rounded-2xl p-4">
+        <div class="font-bold text-slate-200 mb-1">Script de Base de Datos (SQL Editor):</div>
+        <pre class="sql mt-2" id="sql-script">create table if not exists profiles(
+  id text primary key, role text not null, name text not null,
+  cedula text unique not null, email text unique not null, phone text unique not null,
+  address text, photo_cedula text, photo_face text, password_hash text not null,
+  car text, plate text, wallet float default 0, rating float default 5,
+  trips int default 0, earnings float default 0, rides int default 0,
+  online boolean default false, created_at timestamptz default now()
+);
+create table if not exists ride_requests(
+  id text primary key, passenger_id text, passenger_name text,
+  passenger_rating float, passenger_phone text,
+  from_name text, from_lat float, from_lng float,
+  to_name text, to_lat float, to_lng float,
+  km float, min int, price float, vehicle text, vehicle_icon text,
+  coords jsonb, status text default 'pending',
+  driver_id text, driver_name text, driver_car text, driver_plate text, driver_phone text,
+  driver_lat float, driver_lng float,
+  rating int, created_at timestamptz default now()
+);
+alter table profiles enable row level security;
+alter table ride_requests enable row level security;
+create policy "all_profiles" on profiles for all to anon using (true) with check (true);
+create policy "all_requests" on ride_requests for all to anon using (true) with check (true);
+alter publication supabase_realtime add table ride_requests;
+alter publication supabase_realtime add table profiles;</pre>
+        <button onclick="copySql()" class="mt-2 text-xs font-bold bg-slate-800 hover:bg-slate-700 px-3 py-2 rounded-xl text-slate-200 border border-slate-700">📋 Copiar SQL</button>
+      </div>
+      <div class="bg-slate-950 border border-slate-800 rounded-2xl p-4">
+        <div class="font-bold text-slate-200 mb-1">Project Credentials:</div>
+        <input id="sb-url" placeholder="https://xyzxyz.supabase.co" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 mt-2 text-sm text-slate-100 focus:border-[#7DF9FF]">
+        <input id="sb-key" placeholder="eyJhbGciOi..." class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 mt-2 text-sm text-slate-100 focus:border-[#7DF9FF]">
+      </div>
+    </div>
+
+    <div id="backend-error" class="hidden text-sm text-red-400 mt-3 font-medium"></div>
+    <div id="backend-ok" class="hidden text-sm text-green-400 mt-3 font-bold">✅ Sincronizado correctamente con Supabase.</div>
+    <button id="btn-connect" onclick="connectBackendUI()" class="w-full mt-4 py-4 bg-[#7DF9FF] hover:bg-[#5ce1e8] text-slate-950 font-bold rounded-2xl shadow-md transition">Conectar y Validar</button>
+    <button id="btn-disconnect" onclick="disconnectBackend()" class="hidden w-full mt-2 py-3 bg-slate-800 hover:bg-slate-700 rounded-2xl text-sm font-semibold text-slate-300">Desconectar</button>
+  </div>
+</div>
+
+<!-- MODAL: SOLICITUD DE VIAJE CONDUCTOR -->
+<div id="modal-request" class="hidden fixed inset-0 bg-black/80 flex items-end sm:items-center justify-center z-[2000]">
+  <div class="modal bg-slate-900 rounded-t-3xl sm:rounded-3xl w-full max-w-sm p-6 shadow-2xl border border-slate-800" onclick="event.stopPropagation()">
+    <div class="flex justify-between items-start mb-4">
+      <div>
+        <div class="text-[#7DF9FF] text-xs font-black tracking-wide uppercase">NUEVA SOLICITUD</div>
+        <div class="text-xl font-bold text-white" id="req-name">—</div>
+        <div class="text-sm text-slate-400" id="req-rating">★ —</div>
+      </div>
+      <div class="text-right">
+        <div class="text-3xl font-black text-[#7DF9FF]" id="req-price">$0</div>
+        <div class="text-xs text-slate-400 font-medium" id="req-price-bs"></div>
+      </div>
+    </div>
+    <div class="bg-slate-950 border border-slate-800 rounded-2xl p-4 mb-3 space-y-3 text-sm">
+      <div class="flex gap-3"><span>🟢</span><div><div class="text-slate-400 text-xs font-semibold">Punto de Origen:</div><div id="req-pickup" class="font-medium text-slate-200">—</div></div></div>
+      <div class="flex gap-3"><span>🔴</span><div><div class="text-slate-400 text-xs font-semibold">Destino Final:</div><div class="text-[#7DF9FF] font-bold" id="req-dest">—</div></div></div>
+    </div>
+    <div class="h-2 bg-slate-800 rounded-full mt-3 mb-5 overflow-hidden"><div id="req-timer" class="h-full bg-[#7DF9FF] rounded-full" style="width:100%"></div></div>
+    <div class="grid grid-cols-2 gap-3">
+      <button onclick="driverAccept()" class="bg-[#7DF9FF] hover:bg-[#5ce1e8] text-slate-950 font-bold py-4 rounded-2xl shadow-md transition">ACEPTAR VIAJE</button>
+      <button onclick="driverDecline()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 py-4 rounded-2xl font-bold">Rechazar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL CHAT Y LLAMADAS DIRECTAS -->
+<div id="modal-chat" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center z-[2200]">
+  <div class="modal bg-slate-900 border border-slate-800 rounded-t-3xl sm:rounded-3xl w-full max-w-md h-[85vh] flex flex-col p-4 shadow-2xl" onclick="event.stopPropagation()">
+    
+    <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 bg-[#7DF9FF] text-slate-950 rounded-full flex items-center justify-center font-bold text-lg shadow-sm" id="chat-peer-avatar">👤</div>
+        <div>
+          <div class="font-bold text-white leading-tight" id="chat-peer-name">Contacto</div>
+          <div class="text-xs text-slate-400" id="chat-peer-sub">En viaje activo</div>
+        </div>
+      </div>
+      <div class="flex items-center gap-2">
+        <a id="btn-call-phone" href="tel:" class="w-10 h-10 bg-blue-900/60 hover:bg-blue-800 border border-blue-700/60 rounded-full flex items-center justify-center text-blue-300 text-lg shadow-sm" title="Llamar por Teléfono">📞</a>
+        <a id="btn-call-wa" href="https://wa.me/" target="_blank" class="w-10 h-10 bg-green-900/60 hover:bg-green-800 border border-green-700/60 rounded-full flex items-center justify-center text-green-300 text-lg shadow-sm" title="WhatsApp Directo">💬</a>
+        <button onclick="closeChatModal()" class="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-white font-bold text-xl ml-1">✕</button>
+      </div>
+    </div>
+
+    <div id="chat-messages" class="flex-1 overflow-auto py-3 space-y-3"></div>
+
+    <div class="pt-2 border-t border-slate-800 flex items-center gap-2">
+      <label class="w-11 h-11 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-2xl flex items-center justify-center text-xl cursor-pointer shadow-sm text-slate-200" title="Tomar Foto con Cámara">
+        📷
+        <input type="file" accept="image/*" capture="environment" onchange="sendChatPhoto(this)" class="hidden">
+      </label>
+      <input id="chat-input-text" type="text" placeholder="Escribe un mensaje..." onkeypress="if(event.key==='Enter') sendChatMessage()" class="flex-1 bg-slate-800 border border-slate-700 rounded-2xl px-4 py-3 focus:border-[#7DF9FF] text-sm text-slate-100 placeholder-slate-500">
+      <button onclick="sendChatMessage()" class="w-11 h-11 bg-[#7DF9FF] hover:bg-[#5ce1e8] text-slate-950 font-bold rounded-2xl flex items-center justify-center text-lg shadow-sm">➔</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: FINALIZAR / RATING -->
+<div id="modal-finish" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[2000] p-4">
+  <div class="modal bg-slate-900 rounded-3xl w-full max-w-sm p-6 text-center shadow-2xl border border-slate-800" onclick="event.stopPropagation()">
+    <div class="text-6xl mb-3">🎉</div>
+    <div class="text-2xl font-black text-white" id="finish-title">¡Viaje completado!</div>
+    <div class="text-[#7DF9FF] text-4xl font-extrabold my-2" id="finish-amount">$0.00</div>
+    <div class="text-sm text-slate-400 mb-6" id="finish-sub">—</div>
+    <div class="flex justify-center gap-2 text-4xl mb-6" id="finish-stars"></div>
+    <div class="grid grid-cols-2 gap-3">
+      <button onclick="closeFinish()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 py-4 rounded-2xl font-bold">Cerrar</button>
+      <button onclick="submitRideRating()" class="bg-[#7DF9FF] hover:bg-[#5ce1e8] text-slate-950 font-bold py-4 rounded-2xl shadow-md transition">Calificar Servicio</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="hidden fixed top-20 left-1/2 -translate-x-1/2 z-[3000] bg-slate-800 text-white px-6 py-3 rounded-2xl shadow-2xl text-sm font-semibold border border-slate-700"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = n => '$ ' + Number(n).toFixed(2);
+
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    const splash = $('splash-screen');
+    if (splash) {
+      splash.classList.add('fade-out');
+      setTimeout(() => splash.remove(), 650);
+    }
+  }, 2200);
+});
+
+const DB = {
+  mem:{},
+  get(k, d){
+    if(this.mem[k] !== undefined) return this.mem[k];
+    try{ const v = JSON.parse(localStorage.getItem(k)); this.mem[k] = (v ?? d); return this.mem[k]; }
+    catch(e){ this.mem[k] = d; return d; }
+  },
+  set(k, v){ this.mem[k] = v; localStorage.setItem(k, JSON.stringify(v)); }
+};
+const getUsers   = () => DB.get('tm_users', []);
+const getDrivers = () => DB.get('tm_drivers', []);
+const getReqs    = () => DB.get('tm_requests', []);
+function setLocalReqs(r){ DB.set('tm_requests', r); }
+function saveReqs(r){ setLocalReqs(r); pushReqsRemote(r); window.dispatchEvent(new Event('tm_sync')); }
+
+let sb = null, sbChannel = null;
+const backendCfg = () => DB.get('tm_backend', null);
+
+function updateBackendBadge(){
+  const on = !!sb;
+  const badge = $('backend-badge'), cloud = $('hdr-cloud');
+  if(badge){
+    badge.className = 'mt-3 inline-flex items-center gap-2 text-xs font-semibold bg-slate-800 border rounded-full px-3 py-1.5 ' +
+      (on ? 'border-[#7DF9FF]/60 text-[#7DF9FF]' : 'border-slate-700 text-slate-400');
+    badge.textContent = on ? '🟢 Conectado a Supabase Nube' : '⚪ Modo local (solo este navegador)';
+  }
+  if(cloud) cloud.textContent = on ? '🟢' : '⚪';
+  $('btn-disconnect').classList.toggle('hidden', !on);
+}
+
+function openBackend(){
+  const c = backendCfg();
+  if(c){ $('sb-url').value = c.url; $('sb-key').value = c.key; }
+  $('backend-error').classList.add('hidden');
+  $('modal-backend').classList.remove('hidden');
+}
+function copySql(){
+  const txt = $('sql-script').textContent;
+  (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject())
+    .then(() => toast('📋 Script SQL copiado al portapapeles'))
+    .catch(() => toast('Copia el script manualmente'));
+}
+async function connectBackendUI(){
+  const url = $('sb-url').value.trim(), key = $('sb-key').value.trim();
+  const err = $('backend-error'); err.classList.add('hidden');
+  if(!url.startsWith('https://') || !key.startsWith('ey')){ err.textContent = '⚠️ URL o Key de Supabase inválidos.'; err.classList.remove('hidden'); return; }
+  const btn = $('btn-connect'); btn.textContent = 'Conectando...'; btn.disabled = true;
+  try{
+    const client = supabase.createClient(url, key);
+    const { error } = await client.from('profiles').select('id').limit(1);
+    if(error) throw new Error(error.message);
+    sb = client;
+    DB.set('tm_backend', { url, key });
+    await pullAllRemote();
+    subscribeRealtime();
+    updateBackendBadge();
+    $('backend-ok').classList.remove('hidden');
+    toast('🟢 Conectado a la nube exitosamente');
+    setTimeout(() => $('modal-backend').classList.add('hidden'), 1200);
+  }catch(e){
+    err.textContent = '⚠️ Error de conexión: ' + e.message;
+    err.classList.remove('hidden');
+  }finally{
+    btn.textContent = 'Conectar y Validar'; btn.disabled = false;
+  }
+}
+function disconnectBackend(){
+  if(sbChannel) sb.removeChannel(sbChannel);
+  sb = null; sbChannel = null;
+  DB.set('tm_backend', null);
+  updateBackendBadge();
+  toast('⚪ Modo local activado');
+}
+
+function toProfileRow(a){
+  return { id:a.id, role: a.role || (a.car ? 'driver' : 'passenger'), name:a.name,
+    cedula:a.cedula, email:a.email, phone:a.phone, address:a.address ?? null,
+    photo_cedula:a.photoCedula ?? null, photo_face:a.photoFace ?? null,
+    password_hash:a.passwordHash, car:a.car ?? null, plate:a.plate ?? null,
+    wallet:a.wallet ?? 0, rating:a.rating ?? 5, trips:a.trips ?? 0,
+    earnings:a.earnings ?? 0, rides:a.rides ?? 0, online:a.online ?? false,
+    created_at:a.createdAt ?? new Date().toISOString() };
+}
+function fromProfileRow(r){
+  return { id:r.id, role:r.role, name:r.name, cedula:r.cedula, email:r.email, phone:r.phone,
+    address:r.address, photoCedula:r.photo_cedula, photoFace:r.photo_face,
+    passwordHash:r.password_hash, car:r.car, plate:r.plate, wallet:r.wallet,
+    rating:r.rating, trips:r.trips, earnings:r.earnings, rides:r.rides, online:r.online, createdAt:r.created_at };
+}
+function toReqRow(r){
+  return { id:r.id, passenger_id:r.passengerId, passenger_name:r.passengerName,
+    passenger_rating:r.passengerRating, passenger_phone:r.passengerPhone,
+    from_name:r.from.name, from_lat:r.from.lat, from_lng:r.from.lng,
+    to_name:r.to.name, to_lat:r.to.lat, to_lng:r.to.lng,
+    km:r.km, min:r.min, price:r.price, vehicle:r.vehicle, vehicle_icon:r.vehicleIcon,
+    coords:r.coords ?? null, status:r.status,
+    driver_id:r.driverId ?? null, driver_name:r.driverName ?? null, driver_car:r.driverCar ?? null,
+    driver_plate:r.driverPlate ?? null, driver_phone:r.driverPhone ?? null,
+    driver_lat:r.driverLat ?? null, driver_lng:r.driverLng ?? null,
+    rating:r.rating ?? null, created_at:r.createdAt };
+}
+function fromReqRow(r){
+  return { id:r.id, passengerId:r.passenger_id, passengerName:r.passenger_name,
+    passengerRating:r.passenger_rating, passengerPhone:r.passenger_phone,
+    from:{ name:r.from_name, lat:r.from_lat, lng:r.from_lng },
+    to:{ name:r.to_name, lat:r.to_lat, lng:r.to_lng },
+    km:r.km, min:r.min, price:r.price, vehicle:r.vehicle, vehicleIcon:r.vehicle_icon,
+    coords:r.coords, status:r.status,
+    driverId:r.driver_id, driverName:r.driver_name, driverCar:r.driver_car,
+    driverPlate:r.driver_plate, driverPhone:r.driver_phone,
+    driverLat:r.driver_lat, driverLng:r.driver_lng,
+    rating:r.rating, createdAt:r.created_at };
+}
+
+async function pullAllRemote(){
+  if(!sb) return;
+  const [p, r] = await Promise.all([
+    sb.from('profiles').select('*'),
+    sb.from('ride_requests').select('*')
+  ]);
+  if(p.data){
+    DB.set('tm_users',    p.data.filter(x => x.role === 'passenger').map(fromProfileRow));
+    DB.set('tm_drivers', p.data.filter(x => x.role === 'driver').map(fromProfileRow));
+  }
+  if(r.data) DB.set('tm_requests', r.data.map(fromReqRow));
+}
+function pushProfileRemote(a){
+  if(!sb) return;
+  sb.from('profiles').upsert(toProfileRow({ ...a, role: session ? session.role : (a.car ? 'driver' : 'passenger') }))
+    .then(({ error }) => { if(error) console.warn('sync perfil', error.message); });
+}
+function pushReqsRemote(reqs){
+  if(!sb || !reqs.length) return;
+  sb.from('ride_requests').upsert(reqs.map(toReqRow))
+    .then(({ error }) => { if(error) console.warn('sync solicitudes', error.message); });
+}
+
+function subscribeRealtime(){
+  if(!sb) return;
+  sbChannel = sb.channel('drivo-live')
+    .on('postgres_changes', { event:'*', schema:'public', table:'ride_requests' }, payload => {
+      const reqs = getReqs();
+      if(payload.eventType === 'DELETE'){
+        setLocalReqs(reqs.filter(x => x.id !== payload.old.id));
+      }else{
+        const row = fromReqRow(payload.new);
+        const i = reqs.findIndex(x => x.id === row.id);
+        if(i >= 0) reqs[i] = row; else reqs.push(row);
+        setLocalReqs(reqs);
+      }
+      window.dispatchEvent(new Event('tm_sync'));
+      if(session && session.role === 'driver'){
+        if(shownReqId){
+          const cur = getReqs().find(x => x.id === shownReqId);
+          if(!cur || cur.status !== 'pending'){
+            stopUberRing();
+            shownReqId = null;
+            $('modal-request').classList.add('hidden');
+            toast('⚠️ Esta solicitud ya fue tomada por otro conductor.');
+          }
+        }
+        if(me && me.online && !dJob && !shownReqId && (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') && row.status === 'pending' && !declinedIds.includes(row.id)) { showRequestModal(row); }
+        else if(me && me.online && !dJob) driverHome();
+      }
+    })
+    .on('postgres_changes', { event:'*', schema:'public', table:'profiles' }, payload => {
+      if(payload.eventType === 'DELETE') return;
+      const a = fromProfileRow(payload.new);
+      if(a.role === 'passenger'){
+        const us = getUsers(); const i = us.findIndex(x => x.id === a.id);
+        if(i >= 0) us[i] = a; else us.push(a);
+        DB.set('tm_users', us);
+      }else{
+        const ds = getDrivers(); const i = ds.findIndex(x => x.id === a.id);
+        if(i >= 0) ds[i] = a; else ds.push(a);
+        DB.set('tm_drivers', ds);
+      }
+      if(me && me.id === a.id){ me = a; }
+    })
+    .subscribe();
+}
+
+async function hashPw(pw){
+  try{
+    if (crypto && crypto.subtle){
+      const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('troy::' + pw));
+      return [...new Uint8Array(d)].map(b => b.toString(16).padStart(2,'0')).join('');
+    }
+    throw 0;
+  }catch(e){
+    let h = 5381; const s = 'troy::' + pw;
+    for(let i=0;i<s.length;i++) h = ((h<<5)+h+s.charCodeAt(i))>>>0;
+    return 'fb' + h.toString(16);
+  }
+}
+
+let session = DB.get('tm_session', null);
+let me = null;
+
+let authRole = 'passenger', authTab = 'login';
+function setRole(r){
+  authRole = r;
+  $('role-passenger').className = 'flex-1 py-3 rounded-xl transition ' + (r==='passenger' ? 'bg-[#7DF9FF] text-slate-950 font-bold shadow-sm' : 'text-slate-400');
+  $('role-driver').className    = 'flex-1 py-3 rounded-xl transition ' + (r==='driver'    ? 'bg-[#7DF9FF] text-slate-950 font-bold shadow-sm' : 'text-slate-400');
+  $('driver-fields').classList.toggle('hidden', r !== 'driver');
+}
+function switchAuthTab(t){
+  authTab = t;
+  $('tab-login').className    = 'flex-1 py-2.5 rounded-xl transition ' + (t==='login'    ? 'bg-[#7DF9FF] text-slate-950 font-bold shadow-sm' : 'text-slate-400');
+  $('tab-register').className = 'flex-1 py-2.5 rounded-xl transition ' + (t==='register' ? 'bg-[#7DF9FF] text-slate-950 font-bold shadow-sm' : 'text-slate-400');
+  $('form-login').classList.toggle('hidden', t !== 'login');
+  $('form-register').classList.toggle('hidden', t !== 'register');
+  $('login-error').classList.add('hidden');
+  $('register-error').classList.add('hidden');
+}
+function showErr(id, msg){ const e = $(id); e.textContent = msg; e.classList.remove('hidden'); }
+
+function fileToBase64(file){
+  return new Promise((resolve, reject) => {
+    if(!file) return resolve(null);
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = error => reject(error);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function doLogin(){
+  const loginInput = $('li-email').value.trim().toLowerCase();
+  const pass  = await hashPw($('li-pass').value);
+  const list  = authRole === 'passenger' ? getUsers() : getDrivers();
+  const found = list.find(u => (u.email.toLowerCase() === loginInput || (u.cedula && u.cedula.toLowerCase() === loginInput)) && u.passwordHash === pass);
+  if(!found){ showErr('login-error','Datos de acceso o contraseña incorrectos.'); return; }
+  session = { role: authRole, id: found.id };
+  DB.set('tm_session', session);
+  enterApp();
+}
+
+async function doRegister(){
+  const name    = $('rg-name').value.trim();
+  const cedula  = $('rg-cedula').value.trim().toUpperCase();
+  const email   = $('rg-email').value.trim().toLowerCase();
+  const phone   = $('rg-phone').value.trim();
+  const address = $('rg-address').value.trim();
+  const pw      = $('rg-pass').value;
+  
+  const photoCedulaFile = $('rg-photo-cedula').files[0];
+  const photoFaceFile   = $('rg-photo-face').files[0];
+
+  if(name.length < 3)               return showErr('register-error','Ingresa tu nombre completo.');
+  if(cedula.length < 5)             return showErr('register-error','Ingresa un número de cédula válido.');
+  if(!/^\S+@\S+\.\S+$/.test(email)) return showErr('register-error','Correo electrónico inválido.');
+  if(phone.length < 7)              return showErr('register-error','Número telefónico inválido.');
+  if(address.length < 5)            return showErr('register-error','Indica tu dirección exacta de residencia.');
+  if(!photoCedulaFile)              return showErr('register-error','Debes subir la foto de tu Cédula.');
+  if(!photoFaceFile)                return showErr('register-error','Debes subir tu foto de rostro (Selfie).');
+  if(pw.length < 4)                 return showErr('register-error','La contraseña debe tener mín. 4 caracteres.');
+
+  const allUsers = [...getUsers(), ...getDrivers()];
+  if(allUsers.some(u => u.cedula && u.cedula.toLowerCase() === cedula.toLowerCase())) return showErr('register-error','⚠️ Ya existe un usuario registrado con esta Cédula.');
+  if(allUsers.some(u => u.email && u.email.toLowerCase() === email.toLowerCase()))   return showErr('register-error','⚠️ Ya existe un usuario registrado con este Correo.');
+  if(allUsers.some(u => u.phone && u.phone === phone))                               return showErr('register-error','⚠️ Ya existe un usuario registrado con este Teléfono.');
+
+  const photoCedula = await fileToBase64(photoCedulaFile);
+  const photoFace   = await fileToBase64(photoFaceFile);
+
+  const hash = await hashPw(pw);
+  let account;
+  if(authRole === 'passenger'){
+    const users = getUsers();
+    account = { id:'u'+Date.now()+'-'+Math.random().toString(36).slice(2,6), name, cedula, email, phone, address, photoCedula, photoFace,
+                passwordHash:hash, wallet:25.00, rating:5.0, trips:0, createdAt:new Date().toISOString() };
+    users.push(account); DB.set('tm_users', users);
+  }else{
+    const drivers = getDrivers();
+    const car   = $('rg-car').value.trim();
+    const plate = $('rg-plate').value.trim().toUpperCase();
+    if(car.length < 3)   return showErr('register-error','Indica marca, modelo y año del vehículo.');
+    if(plate.length < 5) return showErr('register-error','Placa de vehículo inválida.');
+    account = { id:'d'+Date.now()+'-'+Math.random().toString(36).slice(2,6), name, cedula, email, phone, address, photoCedula, photoFace,
+                passwordHash:hash, car, plate, rating:5.0, earnings:0, rides:0, online:false,
+                createdAt:new Date().toISOString() };
+    drivers.push(account); DB.set('tm_drivers', drivers);
+  }
+  pushProfileRemote({ ...account, role: authRole });
+  session = { role: authRole, id: account.id };
+  DB.set('tm_session', session);
+  toast('✅ Cuenta creada exitosamente. ¡Bienvenido, ' + name.split(' ')[0] + '!');
+  enterApp();
+}
+
+function logout(){
+  if(me && session.role === 'driver'){ me.online = false; saveMe(); }
+  stopPassengerWatch(); stopDriverPolling();
+  session = null; me = null;
+  DB.set('tm_session', null);
+  $('view-app').classList.add('hidden');
+  $('view-auth').classList.remove('hidden');
+}
+
+function saveMe(){
+  if(!me) return;
+  if(session.role === 'passenger'){
+    const us = getUsers(); const i = us.findIndex(u => u.id === me.id);
+    if(i >= 0){ us[i] = me; DB.set('tm_users', us); }
+  }else{
+    const ds = getDrivers(); const i = ds.findIndex(u => u.id === me.id);
+    if(i >= 0){ ds[i] = me; DB.set('tm_drivers', ds); }
+  }
+  pushProfileRemote(me);
+}
+
+let mapInited = false;
+function enterApp(){
+  const list = session.role === 'passenger' ? getUsers() : getDrivers();
+  me = list.find(u => u.id === session.id);
+  if(!me){ logout(); return; }
+  $('view-auth').classList.add('hidden');
+  $('view-app').classList.remove('hidden');
+  $('view-passenger').classList.toggle('hidden', session.role !== 'passenger');
+  $('view-driver').classList.toggle('hidden', session.role !== 'driver');
+  $('hdr-role').textContent = session.role === 'passenger' ? '🧍 Pasajero' : '🚗 Conductor';
+  $('hdr-sub').textContent = me.name.split(' ')[0] + ' • Caracas';
+  if(!mapInited) initMaps();
+  setTimeout(() => { (session.role === 'passenger' ? map : mapD).invalidateSize(); }, 150);
+  if(session.role === 'passenger'){ startPassengerWatch(); }
+  else { me.online = true; saveMe(); driverHome(); startDriverPolling(); }
+}
+
+let BCV_RATE = 887.30;
+const fmtBs = usd => 'Bs ' + (usd * BCV_RATE).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const VEHICLES = [
+  { type:'Moto Rapid',     icon:'🏍️', base:0.60, perKm:0.30, includedKm:2, eta:'3 min' },
+  { type:'Carro Económico', icon:'🚗', base:0,    perKm:1.50, includedKm:0, eta:'4 min' },
+  { type:'Carro Confort',   icon:'🚐', base:0,    perKm:1.90, includedKm:0, eta:'7 min' },
+];
+function calcPrice(v, km){ return +(v.base + v.perKm * Math.max(0, km - (v.includedKm || 0))).toFixed(2); }
+const POPULAR = [
+  { name:'Cooperativa Moto Taxi — Calle José Félix Ribas, Zona 6 (La Vuelta)', lat:10.4867, lng:-66.795, icon:'🏍️' },
+  { name:'Centro Comercial Sambil Chacao', lat:10.4895, lng:-66.8546, icon:'🛍️' },
+  { name:'CCCT (Ciudad Comercial Tamanaco)', lat:10.4840, lng:-66.8560, icon:'🛍️' },
+  { name:'Plaza Venezuela, Caracas', lat:10.4940, lng:-66.8790, icon:'⛲' },
+  { name:'Parque del Este (Generalísimo Francisco de Miranda)', lat:10.4880, lng:-66.8370, icon:'🌳' },
+  { name:'Universidad Central de Venezuela (UCV)', lat:10.4885, lng:-66.8905, icon:'🎓' },
+  { name:'Teatro Teresa Carreño', lat:10.4970, lng:-66.8985, icon:'🎭' },
+  { name:'Los Palos Grandes, Chacao', lat:10.5010, lng:-66.8450, icon:'🏙️' },
+  { name:'Pueblo de El Hatillo', lat:10.4330, lng:-66.8200, icon:'🏘️' },
+  { name:'Terminal de Pasajeros La Bandera', lat:10.4590, lng:-66.9440, icon:'🚌' },
+];
+
+let map, mapD, myMarker, routeLine, destMarker, carMarker, carMarkerD;
+const CCS = { lat:10.4867, lng:-66.795 };
+let myPos = { ...CCS };
+
+function tiles(m){ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{ attribution:'© OpenStreetMap' }).addTo(m); }
+
+/* Mantiene el emoji exacto original (🏍️) y le aplica el filtro CSS para transformarlo a Azul Eléctrico Pastel (#7DF9FF) */
+function emojiIconMotoBlue(s=36){ 
+  return L.divIcon({ 
+    html:`<div style="font-size:${s}px" class="moto-blue-filter">🏍️</div>`, 
+    className:'', 
+    iconSize:[s,s], 
+    iconAnchor:[s/2,s] 
+  }); 
+}
+
+function emojiIcon(e, s=34){ return L.divIcon({ html:`<div style="font-size:${s}px" class="car-marker">${e}</div>`, className:'', iconSize:[s,s], iconAnchor:[s/2,s] }); }
+
+let mapPinMode = false;
+let mapPickupPinMode = false;
+let manualPickupSet = false;
+let myPickupName = 'Cooperativa Moto Taxi — Calle José Félix Ribas, Zona 6 (La Vuelta)';
+
+function setManualPickupCoords(lat, lng, customLabel=null){
+  manualPickupSet = true;
+  myPos = { lat, lng };
+  if (myMarker) myMarker.setLatLng([lat, lng]);
+  if (carMarker && !myActiveReq) carMarker.setLatLng([lat, lng]);
+  if (customLabel) {
+    myPickupName = customLabel;
+    $('pickup-hint').textContent = 'Origen: ' + customLabel;
+    if (ride && ride.to) pickDestination(ride.to);
+    return;
+  }
+  $('pickup-hint').textContent = `Origen: (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+  fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`)
+    .then(res => res.json())
+    .then(data => {
+      const name = data.display_name ? data.display_name.split(',').slice(0,3).join(',') : `Punto exacto (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+      myPickupName = name;
+      $('pickup-hint').textContent = 'Origen: ' + name;
+      toast('🟢 Punto de recogida fijado: ' + name);
+      if (ride && ride.to) pickDestination(ride.to);
+    })
+    .catch(() => {
+      myPickupName = `Punto exacto (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+      $('pickup-hint').textContent = 'Origen: ' + myPickupName;
+      if (ride && ride.to) pickDestination(ride.to);
+    });
+}
+
+function enablePickupPinMode(){
+  mapPickupPinMode = true;
+  mapPinMode = false;
+  toast('🟢 Toca directamente en el mapa donde estás (Ej: José Félix Ribas Zona 6)');
+}
+
+function initMaps(){
+  mapInited = true;
+  map = L.map('map', { zoomControl:false }).setView([CCS.lat, CCS.lng], 16);
+  tiles(map); L.control.zoom({ position:'bottomright' }).addTo(map);
+
+  map.on('click', e => {
+    const lat = e.latlng.lat;
+    const lng = e.latlng.lng;
+    if(mapPickupPinMode){
+      mapPickupPinMode = false;
+      setManualPickupCoords(lat, lng);
+      return;
+    }
+    if(mapPinMode){
+      mapPinMode = false;
+      fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`)
+        .then(res => res.json())
+        .then(data => {
+          const name = data.display_name ? data.display_name.split(',').slice(0,3).join(',') : `Punto marcado (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+          pickDestination({ name, lat, lng, icon:'📌' });
+        })
+        .catch(() => {
+          pickDestination({ name: `Punto en Caracas (${lat.toFixed(4)}, ${lng.toFixed(4)})`, lat, lng, icon:'📌' });
+        });
+    }
+  });
+
+  mapD = L.map('map-driver', { zoomControl:false }).setView([CCS.lat, CCS.lng], 16);
+  tiles(mapD);
+  myMarker = L.marker([CCS.lat, CCS.lng], { icon: emojiIcon('🧍',32), draggable: true }).addTo(map).bindPopup('Cooperativa Moto Taxi — Calle José Félix Ribas, Zona 6 La Vuelta (Arrástrame para ajustar)');
+  myMarker.on('dragend', e => {
+    const p = e.target.getLatLng();
+    setManualPickupCoords(p.lat, p.lng);
+  });
+  carMarker = L.marker([CCS.lat, CCS.lng], { icon: emojiIconMotoBlue(36) }).addTo(map).bindPopup('🏍️ Base Cooperativa Moto Taxi — Zona 6 La Vuelta');
+  carMarkerD = L.marker([CCS.lat, CCS.lng], { icon: emojiIconMotoBlue(36) }).addTo(mapD).bindPopup('🏍️ Base Cooperativa Moto Taxi — Zona 6 La Vuelta');
+  locateMe();
+}
+
+let gpsWatchId = null;
+
+function updateLiveCoordsToCloud(lat, lng) {
+  if (!sb || !me) return;
+  if (session && session.role === 'driver' && dJob) {
+    sb.from('ride_requests').update({ driver_lat: lat, driver_lng: lng }).eq('id', dJob.id).then(() => {});
+  } else if (session && session.role === 'passenger' && myActiveReq) {
+    sb.from('ride_requests').update({ from_lat: lat, from_lng: lng }).eq('id', myActiveReq.id).then(() => {});
+  }
+}
+
+function locateMe(){
+  if(!navigator.geolocation) {
+    toast('⚠️ Tu navegador no soporta geolocalización');
+    return;
+  }
+  const gpsOptions = {
+    enableHighAccuracy: true,
+    timeout: 15000,
+    maximumAge: 0
+  };
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      if (!manualPickupSet || (session && session.role === 'driver')) {
+        myPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        if (myMarker) myMarker.setLatLng([myPos.lat, myPos.lng]);
+        if (carMarkerD) carMarkerD.setLatLng([myPos.lat, myPos.lng]);
+        if (map && session && session.role === 'passenger') map.setView([myPos.lat, myPos.lng], 16);
+        if (mapD && session && session.role === 'driver') mapD.setView([myPos.lat, myPos.lng], 16);
+        updateLiveCoordsToCloud(myPos.lat, myPos.lng);
+      }
+    },
+    () => {
+      if (!manualPickupSet) toast('🟢 Toca el botón verde arriba o arrastra el muñequito para fijar tu origen exacto');
+    },
+    gpsOptions
+  );
+
+  if (gpsWatchId !== null) navigator.geolocation.clearWatch(gpsWatchId);
+  gpsWatchId = navigator.geolocation.watchPosition(
+    pos => {
+      if (!manualPickupSet || (session && session.role === 'driver')) {
+        myPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        if (myMarker) myMarker.setLatLng([myPos.lat, myPos.lng]);
+        if (carMarkerD) carMarkerD.setLatLng([myPos.lat, myPos.lng]);
+        updateLiveCoordsToCloud(myPos.lat, myPos.lng);
+      }
+    },
+    err => console.warn('Watch GPS:', err.message),
+    gpsOptions
+  );
+}
+
+function centerOnMe(){
+  manualPickupSet = false;
+  myPickupName = 'Mi ubicación actual';
+  if ($('pickup-hint')) $('pickup-hint').textContent = 'Origen: Cooperativa Moto Taxi — Calle José Félix Ribas, Zona 6 (La Vuelta)';
+  locateMe();
+  if (map) map.setView([myPos.lat, myPos.lng], 17, { animate:true });
+}
+
+function havKm(a, b){
+  const R=6371, dLa=(b.lat-a.lat)*Math.PI/180, dLo=(b.lng-a.lng)*Math.PI/180;
+  const h = Math.sin(dLa/2)**2 + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLo/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h));
+}
+
+async function realRoute(from, to){
+  try{
+    const url = `https://router.project-osrm.org/route/v1/driving/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson`;
+    const r = await fetch(url); const d = await r.json();
+    if(d.code !== 'Ok') throw 0;
+    const rt = d.routes[0];
+    return { km: rt.distance/1000, min: Math.round(rt.duration/60),
+             coords: rt.geometry.coordinates.map(c => [c[1], c[0]]), real:true };
+  }catch(e){
+    const km = havKm(from, to) * 1.35;
+    return { km, min: Math.round(km*3.2), coords:[[from.lat,from.lng],[to.lat,to.lng]], real:false };
+  }
+}
+
+function gmapsDir(from, to){
+  if(Math.abs(from.lat-to.lat) < 1e-6 && Math.abs(from.lng-to.lng) < 1e-6){
+    toast('⚠️ El destino coincide con tu ubicación actual'); return;
+  }
+  const o = from.lat + ',' + from.lng;
+  const d = (to.name && to.name !== 'Mi ubicación') ? encodeURIComponent(to.name) : (to.lat + ',' + to.lng);
+  window.open('https://www.google.com/maps/dir/?api=1&origin='+o+'&destination='+d+'&travelmode=driving&dir_action=navigate','_blank');
+}
+function gmapsRide(){
+  if(!(ride && ride.to)) return;
+  if(navigator.geolocation){
+    navigator.geolocation.getCurrentPosition(
+      p => { myPos = { lat:p.coords.latitude, lng:p.coords.longitude }; gmapsDir(myPos, ride.to); },
+      () => gmapsDir(myPos, ride.to),
+      { timeout:5000 });
+  } else gmapsDir(myPos, ride.to);
+}
+
+let searchTimer;
+function onSearchInput(q){
+  clearTimeout(searchTimer);
+  if(q.trim().length < 2){ renderResults(POPULAR); return; }
+  searchTimer = setTimeout(() => geocode(q), 350);
+}
+
+async function geocode(q){
+  renderResults([], true);
+  try{
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=10&countrycodes=ve&viewbox=-67.18,10.65,-66.75,10.35&bounded=1&q=${encodeURIComponent(q + ' Caracas Venezuela')}`;
+    const r = await fetch(url, { headers:{ 'Accept-Language':'es' } });
+    const d = await r.json();
+    const res = d.map(x => ({ name: x.display_name.split(',').slice(0,3).join(','), lat:+x.lat, lng:+x.lon, icon:'📍' }));
+    renderResults(res.length ? res : []);
+  }catch(e){ renderResults([]); }
+}
+
+function renderResults(list, loading=false){
+  const c = $('search-results'); c.innerHTML = '';
+  if(loading){ c.innerHTML = '<div class="p-6 text-center text-white text-sm font-medium">Buscando en cada rincón de Caracas...</div>'; return; }
+  if(!list.length){ c.innerHTML = '<div class="p-6 text-center text-white text-sm">No se encontraron resultados exactos. Prueba tocando el mapa o usando el micrófono 🎤.</div>'; return; }
+  list.forEach(p => {
+    const div = document.createElement('div');
+    div.className = 'px-4 py-3.5 flex items-center gap-4 bg-slate-800/95 hover:bg-slate-700 border border-slate-700 rounded-2xl cursor-pointer transition shadow-sm';
+    div.innerHTML = `<div class="text-2xl w-8 text-center">${p.icon}</div>
+      <div class="flex-1 min-w-0"><div class="font-bold text-white text-sm truncate">${p.name}</div>
+      <div class="text-xs text-[#7DF9FF] font-semibold mt-0.5">${havKm(myPos, p).toFixed(1)} km de distancia</div></div>`;
+    div.onclick = () => pickDestination(p);
+    c.appendChild(div);
+  });
+}
+
+
+// ================= RECONOCIMIENTO DE VOZ Y ENVÍO GPS ENLAZADO POR WHATSAPP =================
+const CARACAS_VOICE_PLACES = [
+  { keys: ['palo verde', 'metro palo verde'], name: 'Estación Metro Palo Verde, Petare, Caracas', lat: 10.4789, lng: -66.7997, icon: '🚇' },
+  { keys: ['la vuelta', 'jose felix ribas', 'josé félix ribas', 'zona 6', 'cooperativa'], name: 'Cooperativa Moto Taxi — Calle José Félix Ribas, Zona 6 (La Vuelta)', lat: 10.4867, lng: -66.7950, icon: '🏍️' },
+  { keys: ['petare', 'redoma de petare'], name: 'Redoma de Petare, Caracas', lat: 10.4775, lng: -66.8065, icon: '🚌' },
+  { keys: ['la california', 'california norte', 'california sur'], name: 'La California, Caracas', lat: 10.4832, lng: -66.8195, icon: '🏙️' },
+  { keys: ['los cortijos', 'cortijos'], name: 'Los Cortijos de Lourdes, Caracas', lat: 10.4865, lng: -66.8260, icon: '🏢' },
+  { keys: ['los ruices', 'ruices'], name: 'Los Ruices, Caracas', lat: 10.4882, lng: -66.8325, icon: '🏙️' },
+  { keys: ['boleita', 'boleíta'], name: 'Boleíta Norte / Sur, Caracas', lat: 10.4945, lng: -66.8240, icon: '🏭' },
+  { keys: ['parque del este', 'miranda'], name: 'Parque del Este (Generalísimo Francisco de Miranda)', lat: 10.4880, lng: -66.8370, icon: '🌳' },
+  { keys: ['altamira', 'plaza altamira', 'plaza francia'], name: 'Plaza Francia de Altamira, Caracas', lat: 10.4962, lng: -66.8488, icon: '⛲' },
+  { keys: ['los palos grandes', 'palos grandes'], name: 'Los Palos Grandes, Chacao', lat: 10.5010, lng: -66.8450, icon: '🏙️' },
+  { keys: ['chacao', 'sambil'], name: 'Centro Comercial Sambil Chacao', lat: 10.4895, lng: -66.8546, icon: '🛍️' },
+  { keys: ['ccct', 'tamanaco'], name: 'CCCT (Ciudad Comercial Tamanaco)', lat: 10.4840, lng: -66.8560, icon: '🛍️' },
+  { keys: ['sabana grande', 'chacaito', 'chacaíto'], name: 'Bulevar de Sabana Grande / Chacaíto', lat: 10.4922, lng: -66.8715, icon: '🛍️' },
+  { keys: ['plaza venezuela'], name: 'Plaza Venezuela, Caracas', lat: 10.4940, lng: -66.8790, icon: '⛲' },
+  { keys: ['ucv', 'universidad central'], name: 'Universidad Central de Venezuela (UCV)', lat: 10.4885, lng: -66.8905, icon: '🎓' },
+  { keys: ['el hatillo', 'hatillo'], name: 'Pueblo de El Hatillo', lat: 10.4330, lng: -66.8200, icon: '🏘️' },
+  { keys: ['la banderas', 'la bandera', 'terminal'], name: 'Terminal de Pasajeros La Bandera', lat: 10.4590, lng: -66.9440, icon: '🚌' },
+  { keys: ['catia', 'plaza sucre'], name: 'Catia / Plaza Sucre, Caracas', lat: 10.5145, lng: -66.9420, icon: '🏙️' },
+  { keys: ['el valle', 'valle'], name: 'El Valle, Caracas', lat: 10.4630, lng: -66.9050, icon: '🏙️' }
+];
+
+let activeSpeechRec = null;
+
+function stopVoiceCommand() {
+  if (activeSpeechRec) {
+    try { activeSpeechRec.stop(); } catch (e) {}
+    activeSpeechRec = null;
+  }
+  const b = $('voice-status-banner');
+  if (b) b.classList.add('hidden');
+}
+
+function sendLiveGpsToDriverWhatsApp() {
+  const sendNow = (lat, lng) => {
+    myPos = { lat, lng };
+    if (myMarker) myMarker.setLatLng([lat, lng]);
+    const mapsLink = `https://www.google.com/maps?q=${lat.toFixed(6)},${lng.toFixed(6)}`;
+    const activeReq = myActiveReq || getReqs().find(x => x.passengerId === me.id && ['pending', 'accepted', 'onride'].includes(x.status));
+    const driverPhone = activeReq && activeReq.driverPhone ? activeReq.driverPhone.replace(/\D/g, '') : '';
+    const destText = activeReq && activeReq.to ? `\n🏁 Destino: ${activeReq.to.name}` : (ride && ride.to ? `\n🏁 Destino: ${ride.to.name}` : '');
+    const msg = encodeURIComponent(
+      `📍 *Mi ubicación exacta en GPS (RutaLaVuelta)*\n` +
+      `🧍 Pasajero: ${me ? me.name : 'Cliente'}\n` +
+      `📌 Punto de recogida: ${myPickupName || 'Ubicación actual'}${destText}\n` +
+      `🗺️ Ver en Google Maps: ${mapsLink}`
+    );
+
+    if (driverPhone) {
+      const waNum = driverPhone.startsWith('58') ? driverPhone : '58' + driverPhone.replace(/^0/, '');
+      toast('📲 Abriendo WhatsApp del conductor con tu GPS exacto...');
+      window.open(`https://wa.me/${waNum}?text=${msg}`, '_blank');
+    } else {
+      toast('📲 Selecciona al conductor en WhatsApp para enviar tu GPS exacto');
+      window.open(`https://wa.me/?text=${msg}`, '_blank');
+    }
+  };
+
+  if (navigator.geolocation) {
+    toast('📡 Obteniendo tu señal GPS exacta...');
+    navigator.geolocation.getCurrentPosition(
+      pos => sendNow(pos.coords.latitude, pos.coords.longitude),
+      () => sendNow(myPos.lat, myPos.lng),
+      { enableHighAccuracy: true, timeout: 6000, maximumAge: 0 }
+    );
+  } else {
+    sendNow(myPos.lat, myPos.lng);
+  }
+}
+
+async function resolveVoiceDestination(rawTranscript) {
+  let clean = rawTranscript.toLowerCase().trim();
+  clean = clean
+    .replace(/^(por favor\s+)?(buscar\s+)?(mi\s+)?(punto\s+de\s+)?(destino\s+(es|a|para)?|ir\s+a|ll[eé]vame\s+a|voy\s+a|voy\s+para|hasta)\s+/i, '')
+    .trim();
+
+  if (!clean) {
+    toast('🎙️ No escuché el destino. Intenta diciendo: "Destino Palo Verde"');
+    return;
+  }
+
+  const directMatch = CARACAS_VOICE_PLACES.find(p => p.keys.some(k => clean.includes(k)));
+  if (directMatch) {
+    toast(`🎯 Destino enlazado por voz: ${directMatch.name}`);
+    pickDestination(directMatch);
+    return;
+  }
+
+  toast(`🔍 Buscando "${clean}" en Caracas...`);
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=ve&viewbox=-67.18,10.65,-66.75,10.35&bounded=1&q=${encodeURIComponent(clean + ' Caracas Venezuela')}`;
+    const r = await fetch(url, { headers: { 'Accept-Language': 'es' } });
+    const d = await r.json();
+    if (d && d.length > 0) {
+      const top = d[0];
+      const place = {
+        name: top.display_name.split(',').slice(0, 3).join(','),
+        lat: +top.lat,
+        lng: +top.lon,
+        icon: '📍'
+      };
+      toast(`🎯 Destino enlazado: ${place.name}`);
+      pickDestination(place);
+    } else {
+      openSearch();
+      $('search-input').value = clean;
+      onSearchInput(clean);
+      toast(`⚠️ No se halló dirección exacta para "${clean}". Selecciona en el mapa.`);
+    }
+  } catch (e) {
+    openSearch();
+    $('search-input').value = clean;
+    onSearchInput(clean);
+  }
+}
+
+function startVoiceCommand(mode = 'both') {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    toast('⚠️ Tu navegador no soporta reconocimiento de voz. Usa Google Chrome.');
+    return;
+  }
+  stopVoiceCommand();
+
+  const rec = new SpeechRecognition();
+  activeSpeechRec = rec;
+  rec.lang = 'es-VE';
+  rec.interimResults = false;
+  rec.maxAlternatives = 1;
+
+  const banner = $('voice-status-banner');
+  const statusTxt = $('voice-status-text');
+  if (banner && !$('search-overlay').classList.contains('hidden')) {
+    banner.classList.remove('hidden');
+    statusTxt.textContent = mode === 'gps'
+      ? 'Escuchando... Di "Enviar mi ubicación GPS por WhatsApp"'
+      : 'Escuchando... Di "Destino Palo Verde" o "Enviar ubicación GPS"';
+  }
+  toast(mode === 'gps'
+    ? '🎤 Di: "Enviar mi ubicación GPS por WhatsApp"'
+    : '🎤 Habla ahora: ej. "Destino Palo Verde" o "Enviar GPS por WhatsApp"');
+
+  rec.onresult = event => {
+    const transcript = event.results[0][0].transcript || '';
+    const lower = transcript.toLowerCase();
+    stopVoiceCommand();
+
+    const isGpsCmd = mode === 'gps' ||
+      lower.includes('whatsapp') ||
+      lower.includes('wasap') ||
+      lower.includes('gps') ||
+      (lower.includes('enviar') && (lower.includes('ubicaci') || lower.includes('posici') || lower.includes('donde estoy'))) ||
+      (lower.includes('mandar') && (lower.includes('ubicaci') || lower.includes('gps'))) ||
+      (lower.includes('compartir') && lower.includes('ubicaci'));
+
+    if (isGpsCmd) {
+      const hasAlsoDest = lower.includes('destino') || lower.includes('voy para') || lower.includes('llévame a') || lower.includes('llevame a');
+      if (hasAlsoDest) {
+        const destPart = lower.split(/y\s+enviar|y\s+mandar|por\s+whatsapp|enviar\s+mi\s+ubicaci|enviar\s+gps/i)[0];
+        if (destPart && destPart.trim().length > 4) {
+          resolveVoiceDestination(destPart);
+        }
+      }
+      sendLiveGpsToDriverWhatsApp();
+    } else {
+      resolveVoiceDestination(transcript);
+    }
+  };
+
+  rec.onerror = err => {
+    stopVoiceCommand();
+    if (err.error === 'not-allowed') {
+      toast('⚠️ Permiso de micrófono denegado. Actívalo en el navegador.');
+    } else if (err.error !== 'aborted') {
+      toast('🎙️ No se captó voz. Toca el micrófono e intenta de nuevo.');
+    }
+  };
+
+  rec.onend = () => {
+    stopVoiceCommand();
+  };
+
+  try {
+    rec.start();
+  } catch (e) {
+    toast('⚠️ No se pudo iniciar el micrófono');
+  }
+}
+
+function openSearch(){ $('search-overlay').classList.remove('hidden'); renderResults(POPULAR); setTimeout(()=>$('search-input').focus(),100); }
+function closeSearch(){ $('search-overlay').classList.add('hidden'); }
+
+function enableMapPinMode(){
+  mapPinMode = true;
+  closeSearch();
+  toast('📍 Toca cualquier lugar en el mapa para fijar tu destino');
+}
+
+let ride = null;
+let myActiveReq = null;
+
+function pickDestination(p){
+  closeSearch();
+  $('search-hint').textContent = p.name;
+  if(destMarker) destMarker.remove();
+  destMarker = L.marker([p.lat, p.lng], { icon: emojiIcon('🔴',28) }).addTo(map).bindPopup(p.name);
+  map.flyTo([(myPos.lat+p.lat)/2, (myPos.lng+p.lng)/2], 14);
+  toast('Calculando mejor ruta exacta...');
+  realRoute(myPos, p).then(route => showRoute(route, p));
+}
+
+function showRoute(route, p){
+  if(routeLine) routeLine.remove();
+  routeLine = L.polyline(route.coords, { color:'#7DF9FF', weight:6, opacity:.85 }).addTo(map);
+  map.fitBounds(routeLine.getBounds(), { padding:[50,50] });
+  ride = { to:p, route };
+  showVehicleSheet();
+}
+function sheet(html){ $('sheet').innerHTML = `<div class="sheet bg-slate-900 border-t border-slate-800 rounded-t-3xl p-5 pb-24 shadow-2xl max-h-[65vh] overflow-auto">${html}</div>`; }
+function clearSheet(){ $('sheet').innerHTML = ''; }
+
+function showVehicleSheet(){
+  const km = ride.route.km, min = ride.route.min;
+  const options = VEHICLES.map((v,i) => {
+    const price = calcPrice(v, km);
+    return `<button onclick="pickVehicle(${i})" class="bg-slate-800/80 hover:bg-slate-800 border border-slate-700 rounded-2xl p-4 text-center transition shadow-sm">
+      <div class="text-3xl mb-1">${v.icon}</div>
+      <div class="font-bold text-sm text-slate-200">${v.type}</div>
+      <div class="text-[#7DF9FF] font-black text-lg">${fmt(price)}</div>
+      <div class="text-[11px] text-slate-400 font-medium">${fmtBs(price)}</div>
+      <div class="text-[11px] text-slate-500 mt-1">${v.eta} • ${km.toFixed(1)} km</div>
+    </button>`;
+  }).join('');
+  sheet(`
+    <div class="flex justify-between items-start mb-4">
+      <div><div class="font-extrabold text-lg leading-tight text-white">${ride.to.name}</div>
+      <div class="text-sm text-slate-400 font-medium">${km.toFixed(1)} km • aprox. ${min} min</div></div>
+      <button onclick="clearSheet()" class="text-slate-400 hover:text-white text-xl px-2">✕</button>
+    </div>
+    <div class="text-xs uppercase tracking-wide text-slate-400 font-bold mb-3">Vehículos Disponibles</div>
+    <div class="grid grid-cols-3 gap-3 mb-3">${options}</div>
+    <button onclick="gmapsRide()" class="w-full py-3 mb-3 bg-blue-950/60 border border-blue-800/80 rounded-2xl text-sm font-bold text-[#7DF9FF] hover:bg-blue-900 transition flex items-center justify-center gap-2">🧭 Ver recorrido en Google Maps</button>
+    <button onclick="sheetOffer()" class="w-full py-4 bg-[#7DF9FF] hover:bg-[#5ce1e8] text-slate-950 font-bold rounded-2xl shadow-md transition">💰 Ofrecer mi propia tarifa</button>`);
+}
+
+function pickVehicle(i){
+  ride.vehicle = VEHICLES[i];
+  ride.price = calcPrice(ride.vehicle, ride.route.km);
+  sheetOffer();
+}
+function sheetOffer(){
+  const sug = ride.price ?? calcPrice(VEHICLES[0], ride.route.km);
+  ride.price = sug;
+  const min = Math.max(1, sug*0.6).toFixed(2), max = (sug*1.8).toFixed(2);
+  sheet(`
+    <div class="text-center mb-5">
+      <div class="text-xs uppercase tracking-wide text-slate-400 font-bold">Ofrece tu Tarifa al Conductor</div>
+      <div class="text-5xl font-black text-[#7DF9FF] my-1" id="offer-display">${fmt(sug)}</div>
+      <div class="text-sm font-semibold text-slate-300" id="offer-bs">≈ ${fmtBs(sug)}</div>
+    </div>
+    <input id="offer-range" type="range" min="${min}" max="${max}" step="0.25" value="${sug}"
+           oninput="$('offer-display').textContent=fmt(+this.value); $('offer-bs').textContent='≈ ' + fmtBs(+this.value)" class="w-full accent-[#7DF9FF] mb-6">
+    <div class="grid grid-cols-2 gap-3">
+      <button onclick="showVehicleSheet()" class="py-4 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-2xl font-bold">Atrás</button>
+      <button onclick="ridePayment()" class="py-4 bg-[#7DF9FF] hover:bg-[#5ce1e8] text-slate-950 font-bold rounded-2xl shadow-md">Continuar</button>
+    </div>`);
+}
+function ridePayment(){
+  sheet(`
+    <div class="text-lg font-bold text-white mb-4">Confirmación y Pago</div>
+    <div class="bg-slate-800/80 border-2 border-[#7DF9FF] rounded-2xl p-4 flex items-center justify-between mb-4 shadow-sm">
+      <div class="flex items-center gap-3">
+        <span class="text-3xl">💳</span>
+        <div><div class="font-bold text-sm text-slate-200">Billetera RutaLaVuelta</div>
+        <div class="text-[#7DF9FF] text-sm font-extrabold" id="wallet-bal">${fmt(me.wallet)}</div></div>
+      </div><span class="text-green-400 font-bold">✓ Disponible</span>
+    </div>
+    <button onclick="addFunds()" class="w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-2xl text-sm font-bold border border-slate-700 mb-4">+ Recargar $20 (Saldo Demo)</button>
+    <div class="flex justify-between text-sm text-slate-400 mb-1"><span>${ride.vehicle.icon} ${ride.vehicle.type}</span><span>${ride.route.km.toFixed(1)} km</span></div>
+    <div class="flex justify-between font-black text-xl text-white mb-5"><span>Monto Total</span><span class="text-[#7DF9FF]">${fmt(ride.price)}</span></div>
+    <div class="grid grid-cols-2 gap-3">
+      <button onclick="sheetOffer()" class="py-4 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-2xl font-bold">Atrás</button>
+      <button onclick="confirmRide()" class="py-4 bg-[#7DF9FF] hover:bg-[#5ce1e8] text-slate-950 font-bold rounded-2xl shadow-md">Solicitar Viaje</button>
+    </div>`);
+}
+function addFunds(){
+  me.wallet += 20; saveMe();
+  const b = $('wallet-bal'); if(b) b.textContent = fmt(me.wallet);
+  toast('✅ Saldo añadido a la billetera: +$20');
+}
+
+function confirmRide(){
+  if(me.wallet < ride.price){ toast('⚠️ Saldo insuficiente. Recarga tu billetera.'); return; }
+  me.wallet -= ride.price; saveMe();
+  const req = {
+    id:'r' + Date.now() + '-' + Math.random().toString(36).slice(2,6),
+    passengerId: me.id, passengerName: me.name, passengerRating: me.rating, passengerPhone: me.phone,
+    from:{ name: myPickupName || 'Mi ubicación actual', lat:myPos.lat, lng:myPos.lng },
+    to: ride.to, km:+ride.route.km.toFixed(2), min:ride.route.min,
+    price: ride.price, vehicle: ride.vehicle.type, vehicleIcon: ride.vehicle.icon,
+    coords: ride.route.coords,
+    status:'pending', driverId:null, createdAt:new Date().toISOString()
+  };
+  const reqs = getReqs(); reqs.push(req); saveReqs(reqs);
+  myActiveReq = req;
+  ride = null;
+  renderSearching();
+}
+
+function renderSearching(){
+  $('active-ride-chip').classList.remove('hidden');
+  $('active-ride-text').textContent = `Buscando Conductor • ${fmt(myActiveReq.price)}`;
+  sheet(`
+    <div class="py-8 text-center">
+      <div class="w-16 h-16 border-4 border-[#7DF9FF] border-t-transparent rounded-full animate-spin mx-auto mb-5"></div>
+      <div class="font-extrabold text-xl text-white">Buscando conductor cercano...</div>
+      <div class="text-slate-400 text-sm mt-1">Oferta: ${fmt(myActiveReq.price)} • ${myActiveReq.vehicle}</div>
+    </div>
+    <div class="flex gap-2 mb-3">
+      <button onclick="sendLiveGpsToDriverWhatsApp()" class="flex-1 py-3 bg-emerald-600/90 hover:bg-emerald-500 text-white font-bold rounded-2xl text-xs shadow-md flex items-center justify-center gap-1.5">📍 Compartir mi GPS por WhatsApp</button>
+      <button onclick="startVoiceCommand('both')" class="w-12 bg-[#7DF9FF] text-slate-950 font-bold rounded-2xl flex items-center justify-center text-lg shrink-0">🎤</button>
+    </div>
+    <button onclick="cancelMyRequest()" class="w-full py-4 bg-red-950/80 hover:bg-red-900 border border-red-800 text-red-300 font-bold rounded-2xl transition">Cancelar Solicitud</button>`);
+}
+
+let pWatch = null;
+function startPassengerWatch(){ stopPassengerWatch(); pWatch = setInterval(syncMyRequest, 2000); }
+function stopPassengerWatch(){ clearInterval(pWatch); pWatch = null; }
+
+function syncMyRequest(){
+  if(!session || session.role !== 'passenger') return;
+  const r = getReqs().find(x => x.id === (myActiveReq && myActiveReq.id));
+  if(!r){
+    if(myActiveReq){ myActiveReq = null; stopPassengerWatch();
+      $('active-ride-chip').classList.add('hidden'); clearSheet(); }
+    return;
+  }
+  if (r.driverLat && r.driverLng && carMarker) {
+    carMarker.setLatLng([r.driverLat, r.driverLng]);
+  }
+  if(r.status !== myActiveReq.status || (r.status === 'accepted' && myActiveReq.driverId !== r.driverId)){
+    myActiveReq = r;
+    onMyRequestStatus(r);
+  } else {
+    myActiveReq = r;
+  }
+}
+
+function onMyRequestStatus(r){
+  if(r.status === 'accepted'){
+    $('active-ride-text').innerHTML = `Conductor en camino: ${r.driverName} <span class="moto-blue-filter text-xs">🏍️</span>`;
+    sheet(`
+      <div class="flex items-center gap-4 mb-3">
+        <div class="w-14 h-14 bg-[#7DF9FF] text-slate-950 rounded-full flex items-center justify-center text-3xl font-bold shadow-md">🧑🏻‍✈️</div>
+        <div class="flex-1">
+          <div class="font-extrabold text-white text-base">${r.driverName}</div>
+          <div class="text-xs text-slate-400 font-medium">${r.driverCar || 'Vehículo'} • <span class="font-bold text-slate-200">${r.driverPlate || ''}</span></div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-2.5 mb-2.5">
+        <button onclick="openChatModal('${r.driverName}', '${r.driverPhone}')" class="py-3 bg-blue-950/70 border border-blue-800/80 text-blue-300 font-bold rounded-2xl text-xs shadow-sm">💬 Abrir Chat / Foto</button>
+        <button onclick="openCallChoice('${r.driverPhone}')" class="py-3 bg-green-950/70 border border-green-800/80 text-green-300 font-bold rounded-2xl text-xs shadow-sm">📞 Llamar Conductor</button>
+      </div>
+      <div class="flex gap-2 mb-3">
+        <button onclick="sendLiveGpsToDriverWhatsApp()" class="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-2xl text-xs shadow-md flex items-center justify-center gap-1.5 transition">📍 Enviar mi GPS por WhatsApp al conductor</button>
+        <button onclick="startVoiceCommand('gps')" class="w-12 bg-[#7DF9FF] hover:bg-[#5ce1e8] text-slate-950 font-bold rounded-2xl flex items-center justify-center text-lg shadow-md shrink-0" title="Decir 'Enviar ubicación por WhatsApp'">🎤</button>
+      </div>
+
+      <button onclick="gmapsDir(myPos, r.to)" class="w-full py-3 mb-3 bg-blue-950/60 border border-blue-800/80 rounded-2xl text-sm font-bold text-[#7DF9FF] hover:bg-blue-900 transition flex items-center justify-center gap-2">🧭 Abrir ruta en Google Maps</button>
+      <button onclick="cancelMyRequest()" class="w-full py-3 bg-slate-800 hover:bg-slate-700 text-red-400 font-bold rounded-2xl text-sm">Cancelar Viaje</button>`);
+    toast('🚗 ¡Un conductor ha aceptado tu servicio!');
+  }
+  if(r.status === 'onride'){
+    $('active-ride-text').innerHTML = 'Viaje en Curso <span class="moto-blue-filter text-xs">🏍️</span>';
+    sheet(`
+      <div class="py-3 text-center">
+        <div class="text-5xl mb-2"><span class="moto-blue-filter">🏍️</span></div>
+        <div class="font-extrabold text-lg text-white">En ruta hacia tu destino</div>
+        <div class="text-sm text-slate-400 mt-0.5">${r.to.name}</div>
+      </div>
+      <div class="grid grid-cols-2 gap-3 my-2">
+        <button onclick="openChatModal('${r.driverName}', '${r.driverPhone}')" class="py-3 bg-blue-950/70 border border-blue-800/80 text-blue-300 font-bold rounded-2xl text-sm">💬 Chat activo</button>
+        <button onclick="openCallChoice('${r.driverPhone}')" class="py-3 bg-green-950/70 border border-green-800/80 text-green-300 font-bold rounded-2xl text-sm">📞 Llamar</button>
+      </div>
+      <button onclick="gmapsDir(myPos, r.to)" class="w-full py-3 bg-blue-950/60 border border-blue-800/80 rounded-2xl text-sm font-bold text-[#7DF9FF] hover:bg-blue-900 transition flex items-center justify-center gap-2">🧭 Ver recorrido en Google Maps</button>`);
+  }
+  if(r.status === 'completed'){
+    stopPassengerWatch();
+    $('active-ride-chip').classList.add('hidden');
+    me.trips++; saveMe();
+    $('finish-title').textContent = '¡Llegaste a tu destino!';
+    $('finish-amount').textContent = fmt(r.price);
+    $('finish-sub').textContent = `${r.to.name} • ${r.km} km`;
+    renderStars(); $('modal-finish').classList.remove('hidden');
+    clearSheet();
+    myActiveReq = null;
+  }
+}
+
+function cancelMyRequest(){
+  if(!myActiveReq) return;
+  const reqs = getReqs(); const r = reqs.find(x => x.id === myActiveReq.id);
+  if(r && (r.status === 'pending' || r.status === 'accepted')){
+    r.status = 'cancelled';
+    me.wallet += r.price; saveMe();
+    saveReqs(reqs);
+  }
+  stopPassengerWatch();
+  clearSheet(); $('active-ride-chip').classList.add('hidden');
+  if(routeLine) routeLine.remove(); if(destMarker) destMarker.remove();
+  $('search-hint').textContent = '¿A dónde vas en Caracas?';
+  toast('Viaje cancelado — Reembolso procesado');
+  myActiveReq = null;
+}
+
+function openCallChoice(phone){
+  if(!phone){ toast('⚠️ El usuario no posee número telefónico registrado'); return; }
+  const cleanPhone = phone.replace(/\D/g,'');
+  const waUrl = `https://wa.me/${cleanPhone.startsWith('58') ? cleanPhone : '58'+cleanPhone}`;
+  
+  const choice = confirm(`¿Cómo deseas realizar la llamada?
+
+[Aceptar] -> Enlace directo a WhatsApp
+[Cancelar] -> Llamada Telefónica normal`);
+  if(choice){
+    window.open(waUrl, '_blank');
+  } else {
+    window.location.href = `tel:${phone}`;
+  }
+}
+
+function openChatModal(peerName, peerPhone){
+  $('chat-peer-name').textContent = peerName;
+  $('chat-peer-sub').textContent = peerPhone ? `Tel: ${peerPhone}` : 'Contacto directo';
+  
+  const cleanPhone = peerPhone ? peerPhone.replace(/\D/g,'') : '';
+  const formattedWa = cleanPhone.startsWith('58') ? cleanPhone : '58'+cleanPhone;
+  $('btn-call-wa').href = `https://wa.me/${formattedWa}`;
+  $('btn-call-phone').href = `tel:${peerPhone || ''}`;
+
+  renderChatMessages();
+  $('modal-chat').classList.remove('hidden');
+}
+
+function closeChatModal(){ $('modal-chat').classList.add('hidden'); }
+
+function getChatKey(){
+  const activeReqId = (myActiveReq ? myActiveReq.id : (dJob ? dJob.id : 'default'));
+  return `tm_chat_${activeReqId}`;
+}
+
+function renderChatMessages(){
+  const msgs = DB.get(getChatKey(), []);
+  const c = $('chat-messages'); c.innerHTML = '';
+  if(!msgs.length){
+    c.innerHTML = '<div class="text-center text-slate-500 text-xs py-8">No hay mensajes aún. Envía una nota o foto de referencia de donde estás ubicado.</div>';
+    return;
+  }
+  msgs.forEach(m => {
+    const isMe = m.senderId === me.id;
+    const div = document.createElement('div');
+    div.className = `flex ${isMe ? 'justify-end' : 'justify-start'} mb-2`;
+    
+    let contentHtml = '';
+    if(m.type === 'photo'){
+      contentHtml = `<img src="${m.text}" class="max-w-[200px] rounded-2xl border border-slate-700 shadow-sm cursor-pointer" onclick="window.open('${m.text}')">`;
+    } else {
+      contentHtml = `<div class="px-4 py-2.5 rounded-2xl text-sm ${isMe ? 'bg-[#7DF9FF] text-slate-950 font-semibold rounded-br-none' : 'bg-slate-800 text-slate-100 border border-slate-700 rounded-bl-none'}">${m.text}</div>`;
+    }
+
+    div.innerHTML = `<div class="max-w-[80%]"><div class="text-[10px] text-slate-400 px-1 mb-0.5 ${isMe ? 'text-right' : 'text-left'}">${m.senderName} • ${m.time}</div>${contentHtml}</div>`;
+    c.appendChild(div);
+  });
+  c.scrollTop = c.scrollHeight;
+}
+
+function sendChatMessage(){
+  const txt = $('chat-input-text').value.trim();
+  if(!txt) return;
+  const msgs = DB.get(getChatKey(), []);
+  msgs.push({ senderId: me.id, senderName: me.name.split(' ')[0], text: txt, type: 'text', time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) });
+  DB.set(getChatKey(), msgs);
+  $('chat-input-text').value = '';
+  renderChatMessages();
+}
+
+async function sendChatPhoto(input){
+  const file = input.files[0];
+  if(!file) return;
+  const photoBase64 = await fileToBase64(file);
+  const msgs = DB.get(getChatKey(), []);
+  msgs.push({ senderId: me.id, senderName: me.name.split(' ')[0], text: photoBase64, type: 'photo', time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) });
+  DB.set(getChatKey(), msgs);
+  input.value = '';
+  renderChatMessages();
+}
+
+let currentRating = 5;
+function renderStars(){
+  currentRating = 5;
+  $('finish-stars').innerHTML = [1,2,3,4,5].map(i => `<span onclick="setRating(${i})" class="star cursor-pointer" data-i="${i}">⭐</span>`).join('');
+}
+function setRating(i){
+  currentRating = i;
+  document.querySelectorAll('#finish-stars .star').forEach(s => s.textContent = (+s.dataset.i <= i) ? '⭐' : '☆');
+}
+function submitRideRating(){
+  closeFinish();
+  toast(`¡Gracias! Evaluaste el servicio con ${currentRating} estrellas ⭐`);
+}
+function closeFinish(){
+  $('modal-finish').classList.add('hidden');
+  if(session.role === 'passenger'){
+    if(routeLine) routeLine.remove(); if(destMarker) destMarker.remove();
+    $('search-hint').textContent = '¿A dónde vas en Caracas?'; map.setView([myPos.lat, myPos.lng], 14);
+  } else { driverHome(); startDriverPolling(); }
+}
+
+function navPassenger(p){
+  document.querySelectorAll('.pnav').forEach(b => {
+    const on = b.dataset.p === p;
+    b.classList.toggle('text-[#7DF9FF]', on);
+    b.classList.toggle('text-slate-400', !on);
+  });
+  if(p === 'home'){ clearSheet(); return; }
+  if(p === 'activity') return sheetActivity();
+  if(p === 'wallet') return sheetWallet();
+  if(p === 'profile') return sheetProfile();
+}
+
+function sheetActivity(){
+  const mine = getReqs().filter(r => r.passengerId === me.id);
+  sheet(`
+    <div class="flex justify-between items-center mb-3">
+      <div class="font-extrabold text-lg text-white">📜 Historial de Viajes</div>
+      <button onclick="clearSheet()" class="text-slate-400 hover:text-white text-xl px-2">✕</button>
+    </div>
+    ${mine.length ? mine.map(h=>`
+      <div class="py-3 border-b border-slate-800 flex justify-between items-center text-sm">
+        <div><div class="font-bold text-slate-200">${h.to.name}</div><div class="text-xs text-slate-400">${h.vehicle} • ${h.km} km</div></div>
+        <div class="font-black text-[#7DF9FF]">${fmt(h.price)}</div>
+      </div>`).join('') : '<div class="py-8 text-center text-slate-500 text-sm">No has realizado viajes aún.</div>'}`);
+}
+function sheetWallet(){
+  sheet(`
+    <div class="flex justify-between items-center mb-4">
+      <div class="font-extrabold text-lg text-white">💳 Billetera Digital</div>
+      <button onclick="clearSheet()" class="text-slate-400 hover:text-white text-xl px-2">✕</button>
+    </div>
+    <div class="bg-gradient-to-br from-[#7DF9FF] to-[#0096C7] rounded-3xl p-6 text-slate-950 shadow-md mb-4">
+      <div class="text-xs font-bold opacity-80 uppercase tracking-wide">Saldo Disponible</div>
+      <div class="text-4xl font-black">${fmt(me.wallet)}</div>
+      <div class="text-xs mt-2 font-semibold">${me.name}</div>
+    </div>
+    <button onclick="addFundsSheet()" class="w-full py-4 bg-[#7DF9FF] hover:bg-[#5ce1e8] text-slate-950 font-bold rounded-2xl shadow-md">+ Recargar $20 (Saldo Demo)</button>`);
+}
+function addFundsSheet(){ me.wallet += 20; saveMe(); sheetWallet(); toast('✅ +$20 recargados'); }
+
+function sheetProfile(){
+  sheet(`
+    <div class="flex justify-between items-center mb-4">
+      <div class="font-extrabold text-lg text-white">👤 Perfil Validado</div>
+      <button onclick="clearSheet()" class="text-slate-400 hover:text-white text-xl px-2">✕</button>
+    </div>
+    <div class="flex items-center gap-4 mb-4">
+      ${me.photoFace ? `<img src="${me.photoFace}" class="w-16 h-16 rounded-full object-cover border-2 border-[#7DF9FF] shadow-sm">` : `<div class="w-16 h-16 bg-[#7DF9FF] text-slate-950 rounded-full flex items-center justify-center font-bold text-2xl">🧑🏻</div>`}
+      <div>
+        <div class="font-bold text-white text-base">${me.name}</div>
+        <div class="text-xs text-slate-400 font-semibold">🪪 Cédula: ${me.cedula || 'V-00000000'}</div>
+        <div class="text-xs text-slate-400 font-semibold">📱 ${me.phone}</div>
+      </div>
+    </div>
+    <div class="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 text-xs space-y-2 text-slate-300 font-medium">
+      <div><b>📍 Dirección:</b> ${me.address || 'Caracas, Venezuela'}</div>
+      <div><b>✉️ Correo:</b> ${me.email}</div>
+      <div class="text-green-400 font-bold">✓ Documentos Verificados Únicos</div>
+    </div>`);
+}
+
+let dJob = null;
+let shownReqId = null;
+let declinedIds = [];
+let dPoll = null;
+
+function drvSheet(html){ $('sheet-driver').innerHTML = html ? `<div class="sheet bg-slate-900 border-t border-slate-800 rounded-t-3xl p-5 pb-20 shadow-2xl">${html}</div>` : ''; }
+
+function driverHome(){
+  $('drv-earnings').textContent = fmt(me.earnings);
+  $('drv-status').textContent = me.online ? '● En línea' : '○ Desconectado';
+  $('drv-status').className = 'font-bold ' + (me.online ? 'text-[#7DF9FF]' : 'text-slate-400');
+  if(dJob) return;
+  const pending = getReqs().filter(r => r.status === 'pending' && !declinedIds.includes(r.id));
+  updatePendingCount(pending.length);
+  drvSheet(`
+    <div class="flex items-center gap-4 mb-4">
+      ${me.photoFace ? `<img src="${me.photoFace}" class="w-14 h-14 rounded-full object-cover border-2 border-[#7DF9FF] shadow-sm">` : `<div class="w-14 h-14 bg-slate-800 rounded-full flex items-center justify-center text-3xl">🚙</div>`}
+      <div class="flex-1">
+        <div class="font-bold text-white">${me.car}</div>
+        <div class="text-xs text-slate-400 font-semibold">Placa: ${me.plate} • Cédula: ${me.cedula}</div>
+      </div>
+    </div>
+    <div class="grid grid-cols-2 gap-3 mb-4">
+      <div class="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 text-center"><div class="text-2xl font-black text-[#7DF9FF]">${fmt(me.earnings)}</div><div class="text-xs text-slate-400 font-bold">Total Ganado</div></div>
+      <div class="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 text-center"><div class="text-2xl font-black text-slate-200">${me.rides}</div><div class="text-xs text-slate-400 font-bold">Servicios</div></div>
+    </div>
+    <div class="text-xs text-slate-400 text-center font-medium">${me.online ? '🟢 Esperando solicitudes de pasajeros en Caracas...' : 'Conéctate para recibir solicitudes'}</div>`);
+}
+
+function updatePendingCount(n){
+  const el = $('pending-count');
+  if(n > 0 && me.online && !dJob && !shownReqId){
+    el.classList.remove('hidden');
+    $('pending-count-text').textContent = `🔔 ${n} servicio disponible en espera`;
+  } else el.classList.add('hidden');
+}
+
+function toggleAvailable(){
+  me.online = !me.online; saveMe();
+  driverHome();
+  if(me.online){ initUberAudio(); toast('● En línea para trabajar'); startDriverPolling(); }
+  else { toast('○ Modo desconectado'); stopDriverPolling(); }
+}
+
+function startDriverPolling(){
+  stopDriverPolling();
+  dPoll = setInterval(() => {
+    if (dJob) {
+      const updatedJob = getReqs().find(x => x.id === dJob.id);
+      if (updatedJob && updatedJob.from && mapD) {
+        if (!window.passengerMarkerD) {
+          window.passengerMarkerD = L.marker([updatedJob.from.lat, updatedJob.from.lng], { icon: emojiIcon('🧍', 30) }).addTo(mapD).bindPopup('Ubicación exacta del Pasajero');
+        } else {
+          window.passengerMarkerD.setLatLng([updatedJob.from.lat, updatedJob.from.lng]);
+        }
+      }
+    }
+    if(!me || !me.online || dJob || shownReqId) return;
+    const pending = getReqs().filter(r => r.status === 'pending' && !declinedIds.includes(r.id));
+    updatePendingCount(pending.length);
+    if(pending.length) showRequestModal(pending[0]);
+  }, 3500);
+}
+function stopDriverPolling(){ clearInterval(dPoll); dPoll = null; }
+
+
+
+
+// ================= SISTEMA DE ALARMA CON EL SONIDO DE NOTIFICACIÓN SOLICITADO =================
+let uberAudioCtx = null;
+let uberRingInterval = null;
+let uberWavElement = null;
+let uberAudioUnlocked = false;
+
+function buildExactMarimbaChimeWav() {
+  // Sintetiza en WAV PCM 16-bit mono (22050 Hz) el timbre cálido tipo marimba/campana del video:
+  // Arpegio rápido de 4 notas ascendentes (C5 - E5 - G5 - C6) con armónicos de marimba y eco suave
+  const sampleRate = 22050;
+  const duration = 1.15;
+  const numSamples = Math.floor(sampleRate * duration);
+  const buffer = new ArrayBuffer(44 + numSamples * 2);
+  const view = new DataView(buffer);
+
+  const writeStr = (offset, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + numSamples * 2, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, numSamples * 2, true);
+
+  // Notas exactas del arpegio ascendente del timbre (C5 -> E5 -> G5 -> C6)
+  const notes = [
+    { freq: 523.25, start: 0.00, dur: 0.28, amp: 0.75 }, // Do5
+    { freq: 659.25, start: 0.09, dur: 0.30, amp: 0.80 }, // Mi5
+    { freq: 783.99, start: 0.18, dur: 0.34, amp: 0.85 }, // Sol5
+    { freq: 1046.50, start: 0.27, dur: 0.72, amp: 1.00 } // Do6 (nota final brillante sostenida)
+  ];
+
+  for (let i = 0; i < numSamples; i++) {
+    const t = i / sampleRate;
+    let sample = 0;
+    for (const n of notes) {
+      if (t >= n.start && t <= n.start + n.dur) {
+        const lt = t - n.start;
+        // Ataque rápido de baqueta de marimba (8ms) y decaimiento exponencial cálido
+        const attack = Math.min(1, lt / 0.008);
+        const decay = Math.exp(-4.2 * (lt / n.dur));
+        const env = attack * decay * n.amp;
+        // Timbre de marimba: fundamental fuerte + 4to armónico breve en el golpe + 2do armónico suave
+        const strike = Math.exp(-35 * lt) * 0.35 * Math.sin(2 * Math.PI * (n.freq * 4) * lt);
+        const body = 0.82 * Math.sin(2 * Math.PI * n.freq * lt) + 0.18 * Math.sin(2 * Math.PI * (n.freq * 2) * lt);
+        sample += env * (body + strike);
+      }
+    }
+    const clamped = Math.max(-1, Math.min(1, sample * 0.85));
+    view.setInt16(44 + i * 2, clamped * 32767, true);
+  }
+
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+  return 'data:audio/wav;base64,' + btoa(binary);
+}
+
+function initUberAudio() {
+  if (!uberWavElement) {
+    uberWavElement = new Audio(buildExactMarimbaChimeWav());
+    uberWavElement.preload = 'auto';
+    uberWavElement.volume = 1.0;
+  }
+  if (!uberAudioCtx) {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (AudioCtx) uberAudioCtx = new AudioCtx();
+  }
+  if (uberAudioCtx && uberAudioCtx.state === 'suspended') {
+    uberAudioCtx.resume().catch(() => {});
+  }
+  if (!uberAudioUnlocked && uberWavElement) {
+    uberWavElement.muted = true;
+    uberWavElement.play().then(() => {
+      uberWavElement.pause();
+      uberWavElement.currentTime = 0;
+      uberWavElement.muted = false;
+      uberAudioUnlocked = true;
+    }).catch(() => {
+      uberWavElement.muted = false;
+    });
+  }
+}
+
+['touchstart', 'click', 'keydown'].forEach(evt => {
+  window.addEventListener(evt, initUberAudio, { passive: true });
+});
+
+function playUberChimeOnce() {
+  try {
+    initUberAudio();
+    if (uberWavElement) {
+      uberWavElement.muted = false;
+      uberWavElement.currentTime = 0;
+      uberWavElement.play().catch(() => {});
+    }
+    if (uberAudioCtx) {
+      const now = uberAudioCtx.currentTime;
+      const notes = [
+        { freq: 523.25, start: 0.00, dur: 0.25 },
+        { freq: 659.25, start: 0.09, dur: 0.28 },
+        { freq: 783.99, start: 0.18, dur: 0.32 },
+        { freq: 1046.50, start: 0.27, dur: 0.65 }
+      ];
+      notes.forEach(n => {
+        const osc = uberAudioCtx.createOscillator();
+        const gain = uberAudioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(n.freq, now + n.start);
+        gain.gain.setValueAtTime(0.001, now + n.start);
+        gain.gain.exponentialRampToValueAtTime(0.45, now + n.start + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + n.start + n.dur);
+        osc.connect(gain);
+        gain.connect(uberAudioCtx.destination);
+        osc.start(now + n.start);
+        osc.stop(now + n.start + n.dur + 0.02);
+      });
+    }
+    if (navigator.vibrate) {
+      navigator.vibrate([250, 100, 250, 100, 400]);
+    }
+  } catch (e) {
+    console.warn('Audio notification error:', e);
+  }
+}
+
+function startUberRing() {
+  stopUberRing();
+  playUberChimeOnce();
+  // Se repite cada 1.5 segundos igual que en el video mientras la solicitud esté activa en pantalla
+  uberRingInterval = setInterval(() => {
+    if (shownReqId && !$('modal-request').classList.contains('hidden')) {
+      playUberChimeOnce();
+    } else {
+      stopUberRing();
+    }
+  }, 1500);
+}
+
+function stopUberRing() {
+  if (uberRingInterval) {
+    clearInterval(uberRingInterval);
+    uberRingInterval = null;
+  }
+  if (navigator.vibrate) {
+    navigator.vibrate(0);
+  }
+}
+
+function showRequestModal(req){
+  shownReqId = req.id;
+  $('req-name').textContent = req.passengerName;
+  $('req-rating').textContent = '★ ' + req.passengerRating;
+  $('req-price').textContent = fmt(req.price);
+  $('req-price-bs').textContent = '≈ ' + fmtBs(req.price);
+  $('req-pickup').textContent = req.from.name;
+  $('req-dest').textContent = req.to.name;
+  const bar = $('req-timer');
+  bar.style.transition = 'none'; bar.style.width = '100%';
+  void bar.offsetWidth; bar.style.transition = 'width 20s linear'; bar.style.width = '0%';
+  $('modal-request').classList.remove('hidden');
+  startUberRing();
+  setTimeout(() => { if(shownReqId === req.id) driverDecline(); }, 20000);
+}
+
+function driverDecline(){
+  stopUberRing();
+  if(shownReqId) declinedIds.push(shownReqId);
+  shownReqId = null;
+  $('modal-request').classList.add('hidden');
+  driverHome();
+}
+
+async function driverAccept(){
+  stopUberRing();
+  const targetReqId = shownReqId;
+  shownReqId = null;
+  $('modal-request').classList.add('hidden');
+
+  if(sb){
+    const { data: currentReq } = await sb.from('ride_requests').select('status, driver_id').eq('id', targetReqId).single();
+    if(currentReq && currentReq.status !== 'pending'){
+      toast('⚠️ ¡Lo sentimos! Otro conductor ya aceptó este servicio.');
+      return driverHome();
+    }
+  }
+
+  const reqs = getReqs();
+  const r = reqs.find(x => x.id === targetReqId);
+  if(!r || r.status !== 'pending'){
+    toast('⚠️ Este viaje ya no está disponible.');
+    return driverHome();
+  }
+
+  r.status = 'accepted';
+  r.driverId = me.id; r.driverName = me.name; r.driverCar = me.car; r.driverPlate = me.plate; r.driverPhone = me.phone;
+  saveReqs(reqs);
+  dJob = r;
+  stopDriverPolling();
+  updatePendingCount(0);
+
+  drvSheet(`
+    <div class="font-extrabold text-base text-white mb-1">🟢 Pasajero: ${r.passengerName}</div>
+    <div class="text-xs text-slate-400 font-semibold mb-3">📍 Recoger en: ${r.from.name}</div>
+    
+    <div class="grid grid-cols-2 gap-3 mb-3">
+      <button onclick="openChatModal('${r.passengerName}', '${r.passengerPhone}')" class="py-3 bg-blue-950/70 border border-blue-800/80 text-blue-300 font-bold rounded-2xl text-sm">💬 Chat / Ver Foto</button>
+      <button onclick="openCallChoice('${r.passengerPhone}')" class="py-3 bg-green-950/70 border border-green-800/80 text-green-300 font-bold rounded-2xl text-sm">📞 Llamar Pasajero</button>
+    </div>
+
+    <button onclick="gmapsDir(myPos, dJob.from)" class="w-full py-3 mb-3 bg-blue-950/60 border border-blue-800/80 rounded-2xl text-sm font-bold text-[#7DF9FF] hover:bg-blue-900 transition flex items-center justify-center gap-2">🧭 Ir al punto de recogida en Google Maps</button>
+    <button onclick="driverPickedUp()" class="w-full py-4 bg-[#7DF9FF] hover:bg-[#5ce1e8] text-slate-950 font-extrabold rounded-2xl shadow-md">PASAJERO A BORDO</button>`);
+}
+
+function driverPickedUp(){
+  if(!dJob) return;
+  const reqs = getReqs();
+  const r = reqs.find(x => x.id === dJob.id);
+  if(r){ r.status = 'onride'; saveReqs(reqs); dJob = r; }
+  drvSheet(`
+    <div class="font-extrabold text-base text-white mb-1">🔴 Viaje en Curso</div>
+    <div class="text-xs text-slate-400 font-semibold mb-3">Destino: ${dJob.to.name} • ${dJob.km} km</div>
+    
+    <div class="grid grid-cols-2 gap-3 mb-3">
+      <button onclick="openChatModal('${dJob.passengerName}', '${dJob.passengerPhone}')" class="py-3 bg-blue-950/70 border border-blue-800/80 text-blue-300 font-bold rounded-2xl text-sm">💬 Chat activo</button>
+      <button onclick="openCallChoice('${dJob.passengerPhone}')" class="py-3 bg-green-950/70 border border-green-800/80 text-green-300 font-bold rounded-2xl text-sm">📞 Llamar</button>
+    </div>
+
+    <button onclick="gmapsDir(dJob.from, dJob.to)" class="w-full py-3 mb-3 bg-blue-950/60 border border-blue-800/80 rounded-2xl text-sm font-bold text-[#7DF9FF] hover:bg-blue-900 transition flex items-center justify-center gap-2">🧭 Ver recorrido en Google Maps</button>
+    <button onclick="driverFinish()" class="w-full py-4 bg-[#7DF9FF] hover:bg-[#5ce1e8] text-slate-950 font-extrabold rounded-2xl shadow-md">FINALIZAR SERVICIO</button>`);
+}
+
+function driverFinish(){
+  if(!dJob) return;
+  const reqs = getReqs();
+  const r = reqs.find(x => x.id === dJob.id);
+  if(r && r.status === 'onride'){ r.status = 'completed'; saveReqs(reqs); }
+  me.earnings = +(me.earnings + dJob.price).toFixed(2);
+  me.rides++; saveMe();
+  $('drv-earnings').textContent = fmt(me.earnings);
+  $('finish-title').textContent = '¡Servicio Completado!';
+  $('finish-amount').textContent = fmt(dJob.price);
+  $('finish-sub').textContent = `${dJob.passengerName} • ${dJob.to.name}`;
+  renderStars(); $('modal-finish').classList.remove('hidden');
+  dJob = null;
+  drvSheet('');
+}
+
+function driverEarnings(){
+  drvSheet(`
+    <div class="flex justify-between items-center mb-4">
+      <div class="font-extrabold text-lg text-white">📊 Balance de Ganancias</div>
+      <button onclick="drvSheet('')" class="text-slate-400 hover:text-white text-xl px-2">✕</button>
+    </div>
+    <div class="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 text-center">
+      <div class="text-3xl font-black text-[#7DF9FF]">${fmt(me.earnings)}</div>
+      <div class="text-xs text-slate-400 font-bold uppercase mt-1">Acumulado Total</div>
+    </div>`);
+}
+
+function driverProfile(){
+  drvSheet(`
+    <div class="flex justify-between items-center mb-4">
+      <div class="font-extrabold text-lg text-white">👤 Perfil Conductor</div>
+      <button onclick="drvSheet('')" class="text-slate-400 hover:text-white text-xl px-2">✕</button>
+    </div>
+    <div class="flex items-center gap-4 mb-4">
+      ${me.photoFace ? `<img src="${me.photoFace}" class="w-16 h-16 rounded-full object-cover border-2 border-[#7DF9FF] shadow-sm">` : `<div class="w-16 h-16 bg-slate-800 rounded-full flex items-center justify-center font-bold text-2xl">🧑🏻‍✈️</div>`}
+      <div>
+        <div class="font-bold text-white text-base">${me.name}</div>
+        <div class="text-xs text-slate-400 font-semibold">🪪 Cédula: ${me.cedula}</div>
+        <div class="text-xs text-slate-400 font-semibold">🚙 ${me.car} (${me.plate})</div>
+      </div>
+    </div>`);
+}
+
+window.addEventListener('storage', e => {
+  if(e.key && e.key.startsWith('tm_')) delete DB.mem[e.key];
+  if(e.key === 'tm_requests'){
+    if(session && session.role === 'passenger') syncMyRequest();
+    if(session && session.role === 'driver' && me && me.online && !dJob && !shownReqId) driverHome();
+  }
+});
+window.addEventListener('tm_sync', () => {
+  if(session && session.role === 'passenger') syncMyRequest();
+});
+
+let toastTimer;
+function toast(msg){
+  const t = $('toast'); t.textContent = msg; t.classList.remove('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.add('hidden'), 3500);
+}
+
+window.addEventListener('load', async () => {
+  setRole('passenger');
+  updateBackendBadge();
+  const c = backendCfg();
+  if(c){
+    try{
+      sb = supabase.createClient(c.url, c.key);
+      const { error } = await sb.from('profiles').select('id').limit(1);
+      if(error) throw error;
+      await pullAllRemote();
+      subscribeRealtime();
+      updateBackendBadge();
+    }catch(e){
+      sb = null; updateBackendBadge();
+    }
+  }
+  fetch('https://ve.dolarapi.com/v1/dolares/oficial').then(r => r.json()).then(d => {
+    if(d && d.promedio){ BCV_RATE = +d.promedio; }
+  }).catch(() => {});
+  if(session){ enterApp(); }
+});
+</script>
+</body>
+</html>
